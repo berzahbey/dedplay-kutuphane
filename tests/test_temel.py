@@ -65,6 +65,9 @@ h = zipfile.ZipFile(os.path.join(gecici, "tr_osm.epub")).read("OEBPS/metin/bolum
 ok(h.count('epub:type="noteref"') == 2 and h.count('epub:type="footnote"') == 1, "iki dilli dipnot: 2 atıf, 1 not")
 opf = zipfile.ZipFile(os.path.join(gecici, "osm.epub")).read("OEBPS/content.opf").decode()
 ok('page-progression-direction="rtl"' in opf, "Osmanlıca sağdan sola")
+spine = opf.split("<spine")[1].split("</spine>")[0]
+ok(spine.strip().splitlines()[-1].strip() == '<itemref idref="nav"/>' and spine.index('"kapak"') < spine.index('"b001"'),
+   "okuma sırası: kapak, künye, metin, fihrist en sonda")
 
 # düzeltme
 ok(K.duzelt(t, "b00002", "tr", "Düzeltilmiş metin {{n0001}}.") and t["bloklar"][1]["elle"]["tr"], "düzeltme kaydı ve 'elle' işareti")

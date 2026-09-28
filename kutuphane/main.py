@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from . import depo, epubcheck, katalog
 from . import kitap as K
 
-SURUM = "0.1.0"
+SURUM = "0.1.1"
 STATIK = os.path.join(os.path.dirname(__file__), "static")
 HOST = "http://host.docker.internal"
 SERVISLER = {

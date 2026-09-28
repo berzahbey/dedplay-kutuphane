@@ -324,8 +324,9 @@ def uret(kit, diller, cikti_yolu=None, baslik=None, kapak_png=None):
     meta.append('<meta name="cover" content="kapak-resmi"/>')
     manifest = [f'<item id="{mid}" href="{yol[6:]}" media-type="{mt}"' + (f' properties="{oz}"' if oz else "") + "/>"
                 for yol, _, mt, mid, oz in dosyalar]
-    spine = ['<itemref idref="kapak" linear="yes"/>', '<itemref idref="kunye"/>', '<itemref idref="nav"/>']
+    spine = ['<itemref idref="kapak" linear="yes"/>', '<itemref idref="kunye"/>']
     spine += [f'<itemref idref="{mid}"/>' for _, _, mid in icerik]
+    spine.append('<itemref idref="nav"/>')  # fihrist sayfası kitabın sonunda (liste düğmesi yine çalışır)
     ppd = ' page-progression-direction="rtl"' if u.rtl else ""
     opf = (f'<?xml version="1.0" encoding="utf-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" '
            f'unique-identifier="kimlik" xml:lang="{lang}" dir="{"rtl" if u.rtl else "ltr"}">\n'
