@@ -18,7 +18,7 @@ import unicodedata
 import requests
 
 from . import epub as EPUB
-from . import epubcheck, katalog, openiti
+from . import epubcheck, kaynak, katalog, openiti, osmanlica
 from . import kitap as K
 
 VERI = os.environ.get("DATA_DIR", "/data")
@@ -64,7 +64,7 @@ def liste():
         if not KIMLIK.match(kid) or not os.path.isdir(os.path.join(KITAPLAR, kid)):
             continue
         d = durum_oku(kid)
-        out.append({"kimlik": kid, **{k: d.get(k) for k in ("baslik", "baslik_asil", "yazar", "asama", "hata", "guncellendi",
+        out.append({"kimlik": kid, **{k: d.get(k) for k in ("baslik", "baslik_asil", "yazar", "asama", "hata", "uyari", "guncellendi",
                                                             "eklendi", "epublar")}})
     return sorted(out, key=lambda x: -(x.get("eklendi") or 0))
 
@@ -84,11 +84,12 @@ def surumler(kit):
         out.append(("osmanlica", ["osm"]))
     if "tr" in d and "osm" in d:
         out.append(("turkce-osmanlica", ["tr", "osm"]))
-    ad = DIL_AD.get(asil, asil)
-    if asil in d and "tr" in d:
-        out.append((f"{ad}-turkce", [asil, "tr"]))
-    if asil in d:
-        out.append((ad, [asil]))
+    if asil not in ("tr", "osm"):  # yabancı asıl (Arapça, İngilizce…): asıllı sürümler
+        ad = DIL_AD.get(asil, asil)
+        if asil in d and "tr" in d:
+            out.append((f"{ad}-turkce", [asil, "tr"]))
+        if asil in d:
+            out.append((ad, [asil]))
     return out
 
 
@@ -154,12 +155,54 @@ def _openiti_ekle(kid, version_uri):
     K.kaydet(kit, eski)
 
 
+def _dosya_ekle(kid, yol):
+    """Elindeki kitap (PDF/EPUB/DOCX/TXT) -> kitap.json (Türkçe) -> Osmanlıca -> EPUB'lar."""
+    if not os.path.exists(yol):
+        raise FileNotFoundError("Kaynak dosya bulunamadı: " + yol)
+    kit = kaynak.cevir(yol, lambda m: durum_asama(kid, m), {"yol": yol})
+    eski = kitap_yolu(kid)
+    if os.path.exists(eski):  # yeniden işleme: önceki hâl yedeklenir, Türkçe künye düzeltmeleri korunur
+        onceki = K.yukle(eski)
+        shutil.copy2(eski, eski + ".yedek")
+        for alan in ("baslik", "yazar"):
+            if onceki["kunye"].get(alan, {}).get("elle"):
+                kit["kunye"][alan] = onceki["kunye"][alan]
+    K.kaydet(kit, eski)
+    _osmanlica(kid)
+
+
+def _osmanlica(kid, zorla=False):
+    kit = K.yukle(kitap_yolu(kid))
+    durum_asama(kid, "Osmanlıcaya çevriliyor")
+    try:
+        osmanlica.kitabi_cevir(kit, lambda m: durum_asama(kid, m), zorla=zorla)
+        K.kaydet(kit, kitap_yolu(kid))
+        durum_yaz(kid, uyari=None)
+    except Exception as e:  # çevirici kapalıysa Türkçe EPUB yine üretilir
+        durum_yaz(kid, uyari=f"Osmanlıca çevrilemedi ({type(e).__name__}: {str(e)[:120]}); sadece Türkçe üretildi")
+
+
+def durum_asama(kid, mesaj):
+    durum_yaz(kid, asama=mesaj)
+
+
 def isci():
     while True:
         tur, kid, arg = _kuyruk.get()
         try:
             if tur == "openiti":
                 _openiti_ekle(kid, arg)
+            elif tur == "dosya":
+                _dosya_ekle(kid, arg)
+            elif tur == "osmanlica":
+                _osmanlica(kid, zorla=bool(arg))
+            elif tur == "kunye":
+                kit = K.yukle(kitap_yolu(kid))
+                try:
+                    osmanlica.kunye_cevir(kit)
+                    K.kaydet(kit, kitap_yolu(kid))
+                except Exception as e:
+                    durum_yaz(kid, uyari=f"Künyenin Osmanlıcası çevrilemedi: {type(e).__name__}")
             epub_uret(kid)
         except Exception as e:
             traceback.print_exc()

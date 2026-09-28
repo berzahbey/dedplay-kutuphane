@@ -7,10 +7,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
-from . import depo, epubcheck, katalog
+from fastapi import File, UploadFile
+
+from . import depo, epubcheck, katalog, kaynak
 from . import kitap as K
 
-SURUM = "0.1.1"
+KAYNAK = os.environ.get("KAYNAK_DIR", "/kaynak")
+UZANTILAR = (".pdf", ".epub", ".docx", ".txt")
+
+SURUM = "0.2.0"
 STATIK = os.path.join(os.path.dirname(__file__), "static")
 HOST = "http://host.docker.internal"
 SERVISLER = {
@@ -89,6 +94,84 @@ def openiti_ekle(g: OpenitiEkle):
     return {"ok": True, "kimlik": kid}
 
 
+# ---------------- Elindeki kitaplar: sunucu arşivi ve yükleme ----------------
+def _guvenli(yol):
+    tam = os.path.realpath(os.path.join(KAYNAK, (yol or "").lstrip("/")))
+    if tam != os.path.realpath(KAYNAK) and not tam.startswith(os.path.realpath(KAYNAK) + os.sep):
+        raise HTTPException(400, "Geçersiz yol")
+    return tam
+
+
+@app.get("/api/kaynak")
+def kaynak_gez(yol: str = ""):
+    tam = _guvenli(yol)
+    if not os.path.isdir(tam):
+        raise HTTPException(404, "Klasör bulunamadı (arşiv bağlı mı?)")
+    klasor, dosya = [], []
+    for ad in sorted(os.listdir(tam), key=lambda x: x.lower()):
+        if ad.startswith("."):
+            continue
+        p = os.path.join(tam, ad)
+        if os.path.isdir(p):
+            klasor.append(ad)
+        elif ad.lower().endswith(UZANTILAR):
+            dosya.append({"ad": ad, "boyut": os.path.getsize(p)})
+    ekli = {k["kimlik"] for k in depo.liste()}
+    for f in dosya:
+        f["ekli"] = kaynak.kimlik_uret(os.path.join(tam, f["ad"])) in ekli
+    return {"yol": os.path.relpath(tam, KAYNAK) if tam != os.path.realpath(KAYNAK) else "", "klasor": klasor, "dosya": dosya}
+
+
+def _dosya_isi(yol, gorunen_ad):
+    import time
+    kid = kaynak.kimlik_uret(yol)
+    ilk = depo.durum_oku(kid)
+    baslik, yazar = kaynak._dosya_adindan(gorunen_ad)
+    depo.is_ekle("dosya", kid, yol, tur="dosya", kaynak_kimlik=yol, baslik=ilk.get("baslik") or baslik,
+                 baslik_asil=ilk.get("baslik_asil") or baslik, yazar=ilk.get("yazar") or yazar,
+                 eklendi=ilk.get("eklendi") or int(time.time()))
+    return {"ok": True, "kimlik": kid}
+
+
+class SunucuDosyasi(BaseModel):
+    yol: str
+
+
+@app.post("/api/kitaplar/sunucudan")
+def sunucudan_ekle(g: SunucuDosyasi):
+    tam = _guvenli(g.yol)
+    if not os.path.isfile(tam) or not tam.lower().endswith(UZANTILAR):
+        raise HTTPException(400, "Sadece PDF, EPUB, DOCX ve TXT dosyaları eklenebilir")
+    return _dosya_isi(tam, os.path.basename(tam))
+
+
+@app.post("/api/kitaplar/yukle")
+def yukle(dosya: UploadFile = File(...)):
+    ad = os.path.basename(dosya.filename or "kitap")
+    if not ad.lower().endswith(UZANTILAR):
+        raise HTTPException(400, "Sadece PDF, EPUB, DOCX ve TXT dosyaları yüklenebilir")
+    klasor = os.path.join(depo.VERI, "yuklenen")
+    os.makedirs(klasor, exist_ok=True)
+    hedef = os.path.join(klasor, ad)
+    with open(hedef + ".tmp", "wb") as f:
+        while True:
+            parca = dosya.file.read(1024 * 1024)
+            if not parca:
+                break
+            f.write(parca)
+    os.replace(hedef + ".tmp", hedef)
+    return _dosya_isi(hedef, ad)
+
+
+@app.post("/api/kitaplar/{kid}/osmanlica")
+def osmanlicayi_yenile(kid: str):
+    kit = _kitap(kid)
+    if not any(b["metin"].get("tr") for b in kit["bloklar"]):
+        raise HTTPException(400, "Bu kitapta henüz Türkçe metin yok")
+    depo.is_ekle("osmanlica", kid, tur="epub")
+    return {"ok": True}
+
+
 # ---------------- Kitaplar ----------------
 @app.get("/api/kitaplar")
 def kitaplar():
@@ -133,12 +216,16 @@ class Kunye(BaseModel):
 @app.patch("/api/kitaplar/{kid}/kunye")
 def kunye_duzelt(kid: str, k: Kunye):
     kit = _kitap(kid)
-    if k.baslik_tr is not None:
-        kit["kunye"]["baslik"]["tr"] = k.baslik_tr.strip()
-    if k.yazar_tr is not None:
-        kit["kunye"]["yazar"]["tr"] = k.yazar_tr.strip()
+    degisti = False
+    for alan, deger in (("baslik", k.baslik_tr), ("yazar", k.yazar_tr)):
+        if deger is not None and deger.strip() != kit["kunye"].get(alan, {}).get("tr", ""):
+            kit["kunye"].setdefault(alan, {})["tr"] = deger.strip()
+            kit["kunye"][alan]["elle"] = True
+            kit["kunye"][alan].pop("osm", None)  # Osmanlıcası yeniden çevrilecek
+            degisti = True
     K.kaydet(kit, depo.kitap_yolu(kid))
-    depo.is_ekle("epub", kid, tur="epub")
+    tr_asilli = kit["kunye"].get("asil_dil") == "tr"
+    depo.is_ekle("kunye" if (degisti and tr_asilli) else "epub", kid, tur="epub")
     return {"ok": True}
 
 

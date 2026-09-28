@@ -230,10 +230,22 @@ class _Uretici:
         kucuk.append(f"Bu sürüm: {X(diller_ad)}")
         if kay.get("tur") == "openiti":
             kucuk.append("Asıl metin: Open Islamicate Texts Initiative (OpenITI), " + X(kay.get("kimlik", "")))
+        if kay.get("tur") == "dosya":
+            kucuk.append("Kaynak: kişisel kopya (" + X(kay.get("ad", "")) + ")")
+            cik = ku.get("cikarma") or {}
+            if cik.get("ocr"):
+                kucuk.append(f"Metin OCR ile okundu ({cik['ocr']}/{cik.get('sayfa') or cik['ocr']} sayfa); "
+                             "okuma hataları kalmış olabilir.")
         if kay.get("baski"):
             kucuk.append(f"Kaynak baskı: <span{_attr(asil)}>{X(kay['baski'])}</span>")
         if ku.get("sayfa_kaynagi"):
-            kucuk.append("Sayfa numaraları bu baskıya göredir; çeviride yaklaşık yerdedir.")
+            if asil == "tr":
+                kucuk.append("Sayfa numaraları basılı baskıya göredir" +
+                             ("; Osmanlıcada yaklaşık yerdedir." if "osm" in self.diller else "."))
+            else:
+                kucuk.append("Sayfa numaraları bu baskıya göredir; çeviride yaklaşık yerdedir.")
+        if asil == "tr" and "osm" in self.diller:
+            kucuk.append("Osmanlıca metin, Türkçeden otomatik harf çevirisidir.")
         if kay.get("lisans"):
             kucuk.append("Lisans: " + X(kay["lisans"]) + " — ticari olmayan kişisel kullanım içindir.")
         if any(d != asil for d in self.diller) and asil in ("ar", "en", "fr", "fa"):

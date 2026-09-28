@@ -33,7 +33,7 @@ h2 { font: 600 1.35rem/1.3 var(--serif); margin: 36px 0 12px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
 .dot.ok { background: var(--tile); } .dot.bad { background: var(--danger); }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-top: 32px; }
-.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; font: 600 1rem var(--sans);
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 12px; font: 600 1rem var(--sans); white-space: nowrap;
   color: var(--muted); cursor: pointer; margin-bottom: -1px; }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--tile); }
 button.btn { font: 600 .95rem var(--sans); border-radius: 8px; padding: 9px 16px; cursor: pointer;
@@ -56,6 +56,16 @@ ul.eserler > li { border-bottom: 1px solid var(--line); padding: 16px 4px; displ
 .asama { font-size: .88rem; color: var(--amber); }
 .asama.hazir { color: var(--tile); } .asama.hata { color: var(--danger); }
 .bos { padding: 28px 4px; color: var(--muted); }
+.eser-ust .tr-ad { font: 600 1.35rem/1.35 var(--serif); }
+.yol { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 18px; font-size: .92rem; }
+.yol button { background: none; border: 0; padding: 2px 0; color: var(--lapis); cursor: pointer; font: inherit; }
+.yol span { color: var(--muted); }
+ul.gez { list-style: none; margin: 10px 0 0; padding: 0; border-top: 1px solid var(--line); }
+ul.gez li { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 4px; border-bottom: 1px solid var(--line); }
+ul.gez li button.klasor { background: none; border: 0; cursor: pointer; font: 600 1rem var(--sans); color: var(--ink); text-align: left; padding: 0; }
+ul.gez li button.klasor::before { content: "▸ "; color: var(--muted); }
+.yukle { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 14px; }
+.uyari { color: var(--amber); font-size: .9rem; }
 li.acik { background: var(--surface); }
 .ayrinti { grid-column: 1 / -1; display: grid; gap: 22px; padding: 10px 0 6px; }
 .ayrinti h3 { font: 600 1.05rem var(--serif); margin: 0 0 8px; }
@@ -70,6 +80,7 @@ details.fihrist summary { cursor: pointer; font: 600 1.05rem var(--serif); }
 .fihrist li { font: 1.1rem/1.7 var(--arab); }
 .alt { display: flex; flex-wrap: wrap; gap: 10px; }
 @media (max-width: 640px) {
+  .tabs { overflow-x: auto; } .tabs button { padding: 10px 9px; font-size: .95rem; }
   main { padding: 28px 16px 60px; } h1 { font-size: 1.9rem; } .mark { width: 52px; height: 52px; font-size: 2.1rem; }
   ul.eserler > li { grid-template-columns: 1fr; } .form { grid-template-columns: 1fr; }
 }
@@ -83,18 +94,32 @@ details.fihrist summary { cursor: pointer; font: 600 1.05rem var(--serif); }
     <div class="mark" aria-hidden="true">ك</div>
     <div>
       <h1>Dedplay Kütüphane</h1>
-      <p class="lead">Klasik eserleri bul, sisteme ekle, fihristli ve sayfa numaralı EPUB olarak al.</p>
+      <p class="lead">Elindeki kitapları onar, klasik eserleri bul; fihristli, sayfa numaralı Türkçe ve Osmanlıca EPUB olarak al.</p>
     </div>
   </header>
   <div class="services" id="servisler" aria-live="polite"></div>
 
   <div class="tabs" role="tablist">
     <button role="tab" id="t-kitaplar" aria-selected="true" aria-controls="p-kitaplar">Kitaplarım</button>
+    <button role="tab" id="t-ekle" aria-selected="false" aria-controls="p-ekle">Kitap ekle</button>
     <button role="tab" id="t-openiti" aria-selected="false" aria-controls="p-openiti">OpenITI'de ara</button>
   </div>
 
   <section id="p-kitaplar" role="tabpanel" aria-labelledby="t-kitaplar">
     <ul class="eserler" id="kitaplar"></ul>
+  </section>
+
+  <section id="p-ekle" role="tabpanel" aria-labelledby="t-ekle" hidden>
+    <h2>Sunucudaki arşivden</h2>
+    <p class="not">PDF, EPUB, DOCX ya da TXT seç. Taranmış ve metin katmanı bozuk kitaplar OCR ile baştan okunur; büyük kitaplarda bu birkaç dakika sürer.</p>
+    <nav class="yol" id="yol" aria-label="Klasör yolu"></nav>
+    <ul class="gez" id="gez"></ul>
+    <h2>Bilgisayardan yükle</h2>
+    <div class="yukle">
+      <input type="file" id="dosya" accept=".pdf,.epub,.docx,.txt" aria-label="Kitap dosyası">
+      <button class="btn" type="button" id="yukleBtn">Yükle ve ekle</button>
+      <span class="not" id="yukleDurum" aria-live="polite"></span>
+    </div>
   </section>
 
   <section id="p-openiti" role="tabpanel" aria-labelledby="t-openiti" hidden>
@@ -134,6 +159,7 @@ for (const b of document.querySelectorAll('[role="tab"]')) {
       x.setAttribute("aria-selected", x === b); $("#" + x.getAttribute("aria-controls")).hidden = x !== b;
     }
     if (b.id === "t-openiti") $("#sorgu").focus();
+    if (b.id === "t-ekle" && !$("#gez").children.length) gez("");
   };
 }
 
@@ -177,7 +203,45 @@ $("#araform").onsubmit = async ev => {
   } catch (e) { ul.replaceChildren(E("li", { class: "bos" }, e.message)); }
 };
 
+// ---- kitap ekle: sunucu arşivi
+const boyut = n => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+async function gez(yol) {
+  const ul = $("#gez"); ul.replaceChildren(E("li", { class: "bos" }, "Yükleniyor…"));
+  let d; try { d = await api("/api/kaynak?yol=" + encodeURIComponent(yol)); } catch (e) { ul.replaceChildren(E("li", { class: "bos" }, e.message)); return; }
+  const nav = $("#yol"); nav.replaceChildren(E("button", { type: "button", onclick: () => gez("") }, "Arşiv"));
+  let birikim = "";
+  for (const parca of (d.yol ? d.yol.split("/") : [])) {
+    birikim = birikim ? birikim + "/" + parca : parca; const hedef = birikim;
+    nav.append(E("span", {}, "/"), E("button", { type: "button", onclick: () => gez(hedef) }, parca));
+  }
+  ul.replaceChildren();
+  for (const k of d.klasor) ul.append(E("li", {}, E("button", { class: "klasor", type: "button", onclick: () => gez(d.yol ? d.yol + "/" + k : k) }, k)));
+  for (const f of d.dosya) {
+    const btn = E("button", { class: "btn" + (f.ekli ? " ghost" : ""), type: "button" }, f.ekli ? "Yeniden işle" : "Ekle");
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try { await api("/api/kitaplar/sunucudan", { method: "POST", body: JSON.stringify({ yol: d.yol ? d.yol + "/" + f.ad : f.ad }) });
+            btn.textContent = "Eklendi"; kitaplar(); }
+      catch (e) { btn.disabled = false; alert(e.message); }
+    };
+    ul.append(E("li", {}, E("span", {}, f.ad, " ", E("span", { class: "meta" }, boyut(f.boyut))), btn));
+  }
+  if (!d.klasor.length && !d.dosya.length) ul.append(E("li", { class: "bos" }, "Bu klasörde kitap dosyası yok."));
+}
+$("#yukleBtn").onclick = async () => {
+  const f = $("#dosya").files[0]; if (!f) { $("#yukleDurum").textContent = "Önce bir dosya seç."; return; }
+  const fd = new FormData(); fd.append("dosya", f);
+  $("#yukleBtn").disabled = true; $("#yukleDurum").textContent = "Yükleniyor…";
+  try {
+    const r = await fetch("/api/kitaplar/yukle", { method: "POST", body: fd });
+    const v = await r.json().catch(() => ({})); if (!r.ok) throw new Error(v.detail || `Sunucu hatası (${r.status})`);
+    $("#yukleDurum").textContent = "Eklendi. \"Kitaplarım\" sekmesinde ilerlemesini görebilirsin."; $("#dosya").value = ""; kitaplar();
+  } catch (e) { $("#yukleDurum").textContent = e.message; }
+  $("#yukleBtn").disabled = false;
+};
+
 // ---- kitaplarım
+const arapHarfli = s => /[\u0600-\u06FF]/.test(s || "");
 function asamaYazisi(k) {
   if (k.asama === "hazır") return E("span", { class: "asama hazir" }, `Hazır, ${(k.epublar || []).length} EPUB`);
   if (k.asama === "hata") return E("span", { class: "asama hata" }, "Hata: " + (k.hata || ""));
@@ -193,9 +257,11 @@ async function kitaplar() {
   for (const k of liste) {
     const li = E("li", { class: k.kimlik === acik ? "acik" : "" },
       E("div", { class: "eser-ust" },
-        E("div", { class: "ar", lang: "ar", dir: "rtl" }, k.baslik_asil || k.baslik || k.kimlik),
-        k.baslik && k.baslik !== k.baslik_asil ? E("div", { class: "lat" }, k.baslik) : null,
-        E("div", { class: "meta" }, E("span", {}, k.yazar || ""), asamaYazisi(k))),
+        arapHarfli(k.baslik_asil || k.baslik) ? E("div", { class: "ar", lang: "ar", dir: "rtl" }, k.baslik_asil || k.baslik)
+                                              : E("div", { class: "tr-ad" }, k.baslik || k.kimlik),
+        k.baslik && k.baslik_asil && k.baslik !== k.baslik_asil ? E("div", { class: "lat" }, k.baslik) : null,
+        E("div", { class: "meta" }, E("span", {}, k.yazar || ""), asamaYazisi(k)),
+        k.uyari ? E("div", { class: "uyari" }, k.uyari) : null),
       E("button", { class: "btn ghost", type: "button", "aria-expanded": k.kimlik === acik,
         onclick: () => { acik = acik === k.kimlik ? null : k.kimlik; kitaplar(); } }, k.kimlik === acik ? "Kapat" : "Aç"));
     ul.append(li);
@@ -219,7 +285,8 @@ async function ayrinti(kid, li) {
     kutu.append(E("div", {}, E("h3", {}, "Künye"),
       E("div", { class: "form" }, E("label", {}, "Türkçe eser adı", bas), E("label", {}, "Türkçe yazar adı", yaz)),
       E("p", { class: "meta" }, E("span", {}, kelime(st.kelime)), E("span", {}, `${st.baslik} başlık`), E("span", {}, `${st.sayfa} sayfa işareti`),
-        E("span", { lang: "ar", dir: "rtl" }, ku.kaynak?.baski || "")),
+        ku.kaynak?.tur === "dosya" ? E("span", {}, "Kaynak: " + (ku.kaynak.ad || "")) : E("span", { lang: "ar", dir: "rtl" }, ku.kaynak?.baski || ""),
+        ku.cikarma?.ocr ? E("span", {}, `OCR: ${ku.cikarma.ocr}/${ku.cikarma.sayfa} sayfa` + (ku.cikarma.bozuk_katman ? " (bozuk metin katmanı)" : "")) : null),
       E("div", { class: "alt" }, kaydet)));
   }
   const ep = d.durum.epublar || [];
@@ -234,22 +301,26 @@ async function ayrinti(kid, li) {
           iyi ? "epubcheck: 0 hata, 0 uyarı" : `epubcheck: ${dn.hata} hata, ${dn.uyari} uyarı`);
     epKutu.append(E("div", { class: "epub" },
       E("a", { href: `/api/kitaplar/${encodeURIComponent(kid)}/epub/${encodeURIComponent(e.dosya)}` }, e.diller.map(x => adlar[x] || x).join(" + ")),
-      E("span", { class: "meta" }, `${(e.boyut / 1024 / 1024).toFixed(1)} MB`), rozet));
+      E("span", { class: "meta" }, boyut(e.boyut)), rozet));
   }
   kutu.append(epKutu);
   if (d.fihrist?.length) {
     const ol = E("ol");
-    for (const h of d.fihrist) ol.append(E("li", { lang: "ar", style: `padding-right:${(h.seviye - 1) * 1.4}em` }, h.metin.tr || h.metin.ar || Object.values(h.metin)[0]));
+    const trKitap = d.kunye?.asil_dil === "tr"; if (trKitap) ol.style.direction = "ltr";
+    for (const h of d.fihrist) ol.append(E("li", trKitap ? { style: `padding-left:${(h.seviye - 1) * 1.4}em; font: 1rem/1.7 var(--serif)` }
+                                                     : { lang: "ar", style: `padding-right:${(h.seviye - 1) * 1.4}em` }, h.metin.tr || h.metin.ar || Object.values(h.metin)[0]));
     kutu.append(E("details", { class: "fihrist" }, E("summary", {}, `Fihrist (${d.fihrist.length} başlık)`), ol));
   }
   const yeniden = E("button", { class: "btn ghost", type: "button" }, "EPUB'ları yeniden üret");
   yeniden.onclick = async () => { yeniden.disabled = true; await api(`/api/kitaplar/${encodeURIComponent(kid)}/yeniden`, { method: "POST" }).catch(e => alert(e.message)); kitaplar(); };
+  const osm = d.diller?.includes("tr") ? E("button", { class: "btn ghost", type: "button" }, "Osmanlıcayı yeniden çevir") : null;
+  if (osm) osm.onclick = async () => { osm.disabled = true; await api(`/api/kitaplar/${encodeURIComponent(kid)}/osmanlica`, { method: "POST" }).catch(e => alert(e.message)); kitaplar(); };
   const sil = E("button", { class: "btn danger", type: "button" }, "Kitabı sil");
   sil.onclick = async () => {
     if (!confirm("Bu kitap, kitap.json dosyası ve bütün EPUB'larıyla birlikte silinecek. Emin misin?")) return;
     try { await api("/api/kitaplar/" + encodeURIComponent(kid), { method: "DELETE" }); acik = null; kitaplar(); } catch (e) { alert(e.message); }
   };
-  kutu.append(E("div", { class: "alt" }, yeniden, sil));
+  kutu.append(E("div", { class: "alt" }, yeniden, osm, sil));
 }
 servisler(); kitaplar(); setInterval(servisler, 60000);
 </script>
