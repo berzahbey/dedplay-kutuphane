@@ -1,0 +1,20 @@
+# Deneme için bağımsız kurulum (stack'e dokunmadan). Kararlı olunca docker-compose.stack.yml'e eklenecek.
+# Çalıştırma: docker compose -p dedplay-kutuphane up -d
+services:
+  kutuphane:
+    image: berzahbey/dedplay-kutuphane:latest
+    container_name: dedplay-kutuphane
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    restart: unless-stopped
+    ports:
+      - "8075:8000"
+    volumes:
+      - type: bind
+        source: /DATA/AppData/dedplay-studyo/kutuphane
+        target: /data
+        bind:
+          create_host_path: true
+      - type: bind
+        source: /media/ZimaOS-HD/Kitap
+        target: /kaynak
+        read_only: true

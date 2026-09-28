@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dedplay Kütüphane</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&family=Amiri:wght@400;700&display=swap" rel="stylesheet">
+<style>
+[hidden] { display: none !important; }
+:root {
+  --paper: #f2f4f1; --surface: #ffffff; --ink: #1c2b2a; --muted: #5f6d6a;
+  --line: #d5dcd8; --tile: #1b6e5a; --tile-soft: #e1efe9; --lapis: #2c4a7c; --danger: #9c3b2e; --amber: #9a6b00;
+  --serif: "Literata", Georgia, "Times New Roman", serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --arab: "Amiri", "Traditional Arabic", serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #121917; --surface: #1a2320; --ink: #e3eae7; --muted: #95a39f;
+          --line: #2e3b37; --tile: #58bfa0; --tile-soft: #1e3a31; --lapis: #8fb0e6; --danger: #e08a7c; --amber: #e0b44f; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.55 var(--sans); }
+main { max-width: 920px; margin: 0 auto; padding: 44px 24px 80px; }
+header { display: flex; gap: 18px; align-items: center; }
+.mark { width: 64px; height: 64px; border-radius: 14px; background: var(--tile); color: var(--surface);
+  display: grid; place-items: center; font: 700 2.6rem/1 var(--arab); padding-bottom: 10px; flex: none; }
+h1 { font: 600 2.4rem/1.1 var(--serif); margin: 0; letter-spacing: -0.01em; }
+h2 { font: 600 1.35rem/1.3 var(--serif); margin: 36px 0 12px; }
+.lead { color: var(--muted); margin: 4px 0 0; max-width: 62ch; }
+.services { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 18px; font-size: .88rem; color: var(--muted); }
+.services span { display: inline-flex; gap: 7px; align-items: center; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+.dot.ok { background: var(--tile); } .dot.bad { background: var(--danger); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-top: 32px; }
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; font: 600 1rem var(--sans);
+  color: var(--muted); cursor: pointer; margin-bottom: -1px; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--tile); }
+button.btn { font: 600 .95rem var(--sans); border-radius: 8px; padding: 9px 16px; cursor: pointer;
+  border: 1px solid var(--tile); background: var(--tile); color: var(--surface); }
+button.btn.ghost { background: transparent; color: var(--tile); }
+button.btn.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+button.btn:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid var(--lapis); outline-offset: 2px; }
+input[type=search], input[type=text] { font: 1rem var(--sans); padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--ink); width: 100%; }
+.ara { display: flex; gap: 10px; margin-top: 20px; }
+.not { color: var(--muted); font-size: .9rem; margin: 10px 0 0; }
+ul.eserler { list-style: none; margin: 18px 0 0; padding: 0; border-top: 1px solid var(--line); }
+ul.eserler > li { border-bottom: 1px solid var(--line); padding: 16px 4px; display: grid; grid-template-columns: 1fr auto; gap: 6px 18px; align-items: center; }
+.ar { font: 700 1.55rem/1.5 var(--arab); direction: rtl; text-align: right; }
+.eser-ust { min-width: 0; }
+.eser-ust .ar { text-align: left; }
+.lat { font: 1rem/1.4 var(--serif); }
+.meta { color: var(--muted); font-size: .88rem; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.asama { font-size: .88rem; color: var(--amber); }
+.asama.hazir { color: var(--tile); } .asama.hata { color: var(--danger); }
+.bos { padding: 28px 4px; color: var(--muted); }
+li.acik { background: var(--surface); }
+.ayrinti { grid-column: 1 / -1; display: grid; gap: 22px; padding: 10px 0 6px; }
+.ayrinti h3 { font: 600 1.05rem var(--serif); margin: 0 0 8px; }
+.form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+.form label { font-size: .85rem; color: var(--muted); display: grid; gap: 4px; }
+.epub { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+.epub a { color: var(--lapis); font-weight: 600; text-decoration: none; }
+.rozet { font-size: .8rem; padding: 2px 8px; border-radius: 99px; background: var(--tile-soft); color: var(--tile); }
+.rozet.kotu { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+details.fihrist summary { cursor: pointer; font: 600 1.05rem var(--serif); }
+.fihrist ol { list-style: none; margin: 8px 0 0; padding: 0; direction: rtl; }
+.fihrist li { font: 1.1rem/1.7 var(--arab); }
+.alt { display: flex; flex-wrap: wrap; gap: 10px; }
+@media (max-width: 640px) {
+  main { padding: 28px 16px 60px; } h1 { font-size: 1.9rem; } .mark { width: 52px; height: 52px; font-size: 2.1rem; }
+  ul.eserler > li { grid-template-columns: 1fr; } .form { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: no-preference) { li.acik .ayrinti { animation: ac .18s ease-out; } }
+@keyframes ac { from { opacity: 0; transform: translateY(-4px); } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="mark" aria-hidden="true">ك</div>
+    <div>
+      <h1>Dedplay Kütüphane</h1>
+      <p class="lead">Klasik eserleri bul, sisteme ekle, fihristli ve sayfa numaralı EPUB olarak al.</p>
+    </div>
+  </header>
+  <div class="services" id="servisler" aria-live="polite"></div>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" id="t-kitaplar" aria-selected="true" aria-controls="p-kitaplar">Kitaplarım</button>
+    <button role="tab" id="t-openiti" aria-selected="false" aria-controls="p-openiti">OpenITI'de ara</button>
+  </div>
+
+  <section id="p-kitaplar" role="tabpanel" aria-labelledby="t-kitaplar">
+    <ul class="eserler" id="kitaplar"></ul>
+  </section>
+
+  <section id="p-openiti" role="tabpanel" aria-labelledby="t-openiti" hidden>
+    <form class="ara" id="araform">
+      <input type="search" id="sorgu" placeholder="Yazar ya da eser: gazali iktisad, ibn arabi fusus, الاقتصاد…" autocomplete="off" aria-label="OpenITI'de ara">
+      <button class="btn" type="submit">Ara</button>
+    </form>
+    <p class="not">Türkçe yazabilirsin; şapka, ş/sh, k/q farkı ve "el-, ibn" gibi ekler aramayı etkilemez. Arapça harfle de aranır. İlk aramada katalog indirilir (birkaç saniye).</p>
+    <ul class="eserler" id="sonuclar"></ul>
+  </section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const E = (tag, attrs = {}, ...kids) => {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") el.className = v; else if (k.startsWith("on")) el[k] = v; else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c != null) el.append(c.nodeType ? c : document.createTextNode(c));
+  return el;
+};
+async function api(yol, secenek = {}) {
+  const r = await fetch(yol, { headers: { "Content-Type": "application/json" }, ...secenek });
+  const veri = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(veri.detail || `Sunucu hatası (${r.status})`);
+  return veri;
+}
+const binlik = n => Number(n || 0).toLocaleString("tr-TR");
+const kelime = n => n >= 1000 ? `${binlik(Math.round(n / 1000))} bin kelime` : `${binlik(n)} kelime`;
+const ilkAd = s => (s || "").split("::")[0].trim();
+let acik = null, yoklama = null;
+
+// ---- sekmeler
+for (const b of document.querySelectorAll('[role="tab"]')) {
+  b.onclick = () => {
+    for (const x of document.querySelectorAll('[role="tab"]')) {
+      x.setAttribute("aria-selected", x === b); $("#" + x.getAttribute("aria-controls")).hidden = x !== b;
+    }
+    if (b.id === "t-openiti") $("#sorgu").focus();
+  };
+}
+
+// ---- servisler
+async function servisler() {
+  try {
+    const d = await api("/api/durum");
+    const kutu = $("#servisler"); kutu.replaceChildren();
+    const ekle = (ad, ok) => kutu.append(E("span", {}, E("i", { class: "dot " + (ok ? "ok" : "bad") }), ad));
+    for (const [ad, ok] of Object.entries(d.servisler)) ekle(ad, ok);
+    ekle("epubcheck", d.epubcheck);
+    kutu.append(E("span", {}, "sürüm " + d.surum));
+  } catch (e) { $("#servisler").textContent = "Durum alınamadı: " + e.message; }
+}
+
+// ---- OpenITI arama
+$("#araform").onsubmit = async ev => {
+  ev.preventDefault();
+  const q = $("#sorgu").value.trim(); if (!q) return;
+  const ul = $("#sonuclar"); ul.replaceChildren(E("li", { class: "bos" }, "Aranıyor…"));
+  try {
+    const s = await api("/api/katalog/ara?q=" + encodeURIComponent(q));
+    ul.replaceChildren();
+    if (!s.length) { ul.append(E("li", { class: "bos" }, "Sonuç yok. Yazarın ya da eserin başka bir yazımını dene (ör. razi yerine fahr razi).")); return; }
+    for (const r of s) {
+      const btn = E("button", { class: "btn" + (r.ekli ? " ghost" : ""), type: "button" }, r.ekli ? "Yeniden al" : "Ekle");
+      btn.onclick = async () => {
+        btn.disabled = true;
+        try { await api("/api/kitaplar/openiti", { method: "POST", body: JSON.stringify({ version_uri: r.versionUri }) });
+              btn.textContent = "Eklendi"; kitaplar(); }
+        catch (e) { btn.disabled = false; alert(e.message); }
+      };
+      ul.append(E("li", {},
+        E("div", { class: "eser-ust" },
+          E("div", { class: "ar", lang: "ar", dir: "rtl" }, ilkAd(r.title_ar)),
+          E("div", { class: "lat" }, [r.author_lat_shuhra, r.title_lat || r.book].filter(Boolean).join(", ")),
+          E("div", { class: "meta" }, E("span", { lang: "ar", dir: "rtl" }, ilkAd(r.author_ar)),
+            E("span", {}, `v. ${Number(r.date)} h.`), E("span", {}, kelime(Number(r.tok_length))))),
+        btn));
+    }
+  } catch (e) { ul.replaceChildren(E("li", { class: "bos" }, e.message)); }
+};
+
+// ---- kitaplarım
+function asamaYazisi(k) {
+  if (k.asama === "hazır") return E("span", { class: "asama hazir" }, `Hazır, ${(k.epublar || []).length} EPUB`);
+  if (k.asama === "hata") return E("span", { class: "asama hata" }, "Hata: " + (k.hata || ""));
+  return E("span", { class: "asama" }, k.asama || "…");
+}
+async function kitaplar() {
+  let liste;
+  try { liste = await api("/api/kitaplar"); } catch (e) { return; }
+  const ul = $("#kitaplar"); ul.replaceChildren();
+  if (!liste.length) {
+    ul.append(E("li", { class: "bos" }, "Henüz kitap yok. \"OpenITI'de ara\" sekmesinden bir eser bulup ekle."));
+  }
+  for (const k of liste) {
+    const li = E("li", { class: k.kimlik === acik ? "acik" : "" },
+      E("div", { class: "eser-ust" },
+        E("div", { class: "ar", lang: "ar", dir: "rtl" }, k.baslik_asil || k.baslik || k.kimlik),
+        k.baslik && k.baslik !== k.baslik_asil ? E("div", { class: "lat" }, k.baslik) : null,
+        E("div", { class: "meta" }, E("span", {}, k.yazar || ""), asamaYazisi(k))),
+      E("button", { class: "btn ghost", type: "button", "aria-expanded": k.kimlik === acik,
+        onclick: () => { acik = acik === k.kimlik ? null : k.kimlik; kitaplar(); } }, k.kimlik === acik ? "Kapat" : "Aç"));
+    ul.append(li);
+    if (k.kimlik === acik) ayrinti(k.kimlik, li);
+  }
+  const suruyor = liste.some(k => !["hazır", "hata"].includes(k.asama));
+  clearTimeout(yoklama); if (suruyor) yoklama = setTimeout(kitaplar, 3000);
+}
+async function ayrinti(kid, li) {
+  const kutu = E("div", { class: "ayrinti" }, "Yükleniyor…"); li.append(kutu);
+  let d; try { d = await api("/api/kitaplar/" + encodeURIComponent(kid)); } catch (e) { kutu.textContent = e.message; return; }
+  kutu.replaceChildren();
+  if (d.kunye) {
+    const ku = d.kunye, st = d.istatistik;
+    const bas = E("input", { type: "text", value: ku.baslik.tr || "", placeholder: "ör. el-İktisâd fi'l-İ'tikâd" });
+    const yaz = E("input", { type: "text", value: ku.yazar.tr || "", placeholder: "ör. Gazzâlî" });
+    const kaydet = E("button", { class: "btn", type: "button" }, "Kaydet ve EPUB'ları yenile");
+    kaydet.onclick = async () => { kaydet.disabled = true;
+      try { await api(`/api/kitaplar/${encodeURIComponent(kid)}/kunye`, { method: "PATCH", body: JSON.stringify({ baslik_tr: bas.value, yazar_tr: yaz.value }) }); kitaplar(); }
+      catch (e) { alert(e.message); kaydet.disabled = false; } };
+    kutu.append(E("div", {}, E("h3", {}, "Künye"),
+      E("div", { class: "form" }, E("label", {}, "Türkçe eser adı", bas), E("label", {}, "Türkçe yazar adı", yaz)),
+      E("p", { class: "meta" }, E("span", {}, kelime(st.kelime)), E("span", {}, `${st.baslik} başlık`), E("span", {}, `${st.sayfa} sayfa işareti`),
+        E("span", { lang: "ar", dir: "rtl" }, ku.kaynak?.baski || "")),
+      E("div", { class: "alt" }, kaydet)));
+  }
+  const ep = d.durum.epublar || [];
+  const epKutu = E("div", {}, E("h3", {}, "EPUB dosyaları"));
+  if (!ep.length) epKutu.append(E("p", { class: "meta" }, "Henüz üretilmedi."));
+  const adlar = { tr: "Türkçe", osm: "Osmanlıca", ar: "Arapça", en: "İngilizce", fr: "Fransızca" };
+  for (const e of ep) {
+    const dn = e.denetim || {};
+    const iyi = dn.hata === 0 && dn.uyari === 0;
+    const rozet = dn.hata == null ? E("span", { class: "rozet kotu" }, "denetlenemedi")
+      : E("span", { class: "rozet" + (iyi ? "" : " kotu"), title: (dn.mesajlar || []).join("\n") },
+          iyi ? "epubcheck: 0 hata, 0 uyarı" : `epubcheck: ${dn.hata} hata, ${dn.uyari} uyarı`);
+    epKutu.append(E("div", { class: "epub" },
+      E("a", { href: `/api/kitaplar/${encodeURIComponent(kid)}/epub/${encodeURIComponent(e.dosya)}` }, e.diller.map(x => adlar[x] || x).join(" + ")),
+      E("span", { class: "meta" }, `${(e.boyut / 1024 / 1024).toFixed(1)} MB`), rozet));
+  }
+  kutu.append(epKutu);
+  if (d.fihrist?.length) {
+    const ol = E("ol");
+    for (const h of d.fihrist) ol.append(E("li", { lang: "ar", style: `padding-right:${(h.seviye - 1) * 1.4}em` }, h.metin.tr || h.metin.ar || Object.values(h.metin)[0]));
+    kutu.append(E("details", { class: "fihrist" }, E("summary", {}, `Fihrist (${d.fihrist.length} başlık)`), ol));
+  }
+  const yeniden = E("button", { class: "btn ghost", type: "button" }, "EPUB'ları yeniden üret");
+  yeniden.onclick = async () => { yeniden.disabled = true; await api(`/api/kitaplar/${encodeURIComponent(kid)}/yeniden`, { method: "POST" }).catch(e => alert(e.message)); kitaplar(); };
+  const sil = E("button", { class: "btn danger", type: "button" }, "Kitabı sil");
+  sil.onclick = async () => {
+    if (!confirm("Bu kitap, kitap.json dosyası ve bütün EPUB'larıyla birlikte silinecek. Emin misin?")) return;
+    try { await api("/api/kitaplar/" + encodeURIComponent(kid), { method: "DELETE" }); acik = null; kitaplar(); } catch (e) { alert(e.message); }
+  };
+  kutu.append(E("div", { class: "alt" }, yeniden, sil));
+}
+servisler(); kitaplar(); setInterval(servisler, 60000);
+</script>
+</body>
+</html>
