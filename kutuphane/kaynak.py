@@ -324,7 +324,19 @@ def _dipnot_ayir(rows, h, govde):
     return rows, []
 
 
-_SAHTE_UST = re.compile(r"(?<=[^\W\d_][.,;:])[!|?'’”\"°](?=\s|$)")
+_SAHTE_UST = re.compile(r"(?<=[^\W\d_][.,;:])\s?[!|?'’”\"°](?=\s|$)")
+_SON_ISARET = re.compile(r"(?<=[.!?…])\s+['’‘\"”|°]$")
+
+
+def _tirnak_esli(once, k):
+    """Paragraf sonundaki işaret, önceden açılmış bir tırnağın kapanışı mı (gerçek tırnak)?"""
+    if k == "”":
+        return once.count("“") > once.count("”")
+    if k == '"':
+        return once.count('"') % 2 == 1
+    if k in "’'":
+        return once.count("‘") > once.count("’")
+    return False
 
 
 def _okunamayan_ust_simge(metin, sayfa_notu, baglanan):
@@ -422,6 +434,10 @@ def pdf_oku(yol, ilerleme=None):
                     metin = _okunamayan_ust_simge(metin, sayfa_notu, baglanan)
             elif tur == "p":
                 metin = YAPISIK.sub("", metin)
+            if tur == "p" and sayfalar[i][3]:  # bağlanamayan sahipsiz son işaret: sil
+                son = _SON_ISARET.search(metin)
+                if son and not _tirnak_esli(metin[:son.start()], son.group(0).strip()):
+                    metin = metin[:son.start()]
             yeni_paras.append((tur, metin, boy))
         # metinde atfı bulunamayan notlar: sayfanın son paragrafının sonuna bağlanır (not kaybolmasın)
         bosta = [g for g in sayfa_notu.values() if g not in baglanan]
@@ -619,6 +635,63 @@ def _buyuk_harfli(t):
     return bool(h) and all(c.isupper() for c in h)
 
 
+_COP_ISARET = re.compile(r"[#»«|<>@^~_=\\{}\[\]]")
+
+
+def anlamli_baslik(t):
+    """Başlık gerçekten başlık mı? OCR çöpü (Arapça satırın Türkçe OCR'ı) ve tek kalmış cümle sonları elenir."""
+    t = SAYFA_ISARET.sub("", t).strip()
+    if not t or len(t) > 90 or _COP_ISARET.search(t) or t[0] in "“\"'‘«(":
+        return False  # tırnakla başlayan satır cümle parçasıdır
+    if TS.ICERIK_BASLIK.match(t) or BOLUM_NO.match(t) or re.fullmatch(
+            r"(bölüm|kısım|fasıl|bab|kitap|makale)\s+([ivxlc]{1,6}|\d{1,3})[.:]?", t, re.I):
+        return True
+    if t[0].islower() or (t.endswith((".", ",", ";")) and not re.search(r"\b(vs|bkz|s|c)\.$", t, re.I)):
+        return False
+    kelimeler = re.findall(r"[^\W\d_]{2,}", t)
+    if not kelimeler or max(len(k) for k in kelimeler) < 3:
+        return False
+    harf = sum(len(k) for k in kelimeler)
+    if harf / max(1, len(re.sub(r"\s", "", t))) < 0.7:
+        return False
+    baglac = ("ve", "ile", "ki", "da", "de", "ya", "veya", "ya da")
+    asil_kel = [k for k in kelimeler if k.lower() not in baglac] or kelimeler
+    if sum(len(k) for k in asil_kel) / len(asil_kel) < 3.5:
+        return False  # OCR çöpü: 2-3 harflik parçalar
+    for parca in t.split():  # tek başına duran harf (EĞEN ğ): çöp; noktalı kısaltmalar (S.A.V.) muaf
+        oz = parca.strip("()[]:;,!?\"“”'’‘")
+        if len(oz) == 1 and oz.isalpha() and oz.lower() != "o" and not re.fullmatch(r"[IVXLC]", oz):
+            return False
+    # büyük/küçük harf düzeni: TAMAMI BÜYÜK ya da Düzgün Yazım; karışık (PAS TAİ Kan yay) başlık değildir
+    buyuk = [k for k in kelimeler if len(k) >= 2 and k.isupper()]
+    kucuk = [k for k in kelimeler if not k.isupper() and k.lower() not in ("ve", "ile", "ki", "da", "de", "ya", "veya")]
+    if buyuk and kucuk and not all(re.search(re.escape(k) + r"\.", t) for k in buyuk):
+        return False
+    iyi = sum(1 for k in kelimeler if DZ.gecerli_mi(k) or DZ._kelime_mi(k))
+    return iyi / len(kelimeler) >= 0.75
+
+
+def _basliklari_denetle(ogeler):
+    """Anlamsız başlıklar paragraf olur; küçük harfle başlayan cümle sonu önceki paragrafa eklenir."""
+    out = []
+    for k, o in enumerate(ogeler):
+        sonraki = ogeler[k + 1] if k + 1 < len(ogeler) else None
+        if o["tur"] == "baslik" and sonraki and sonraki["tur"] == "p" and \
+                SAYFA_ISARET.sub("", sonraki["metin"]).lstrip()[:1].islower():
+            # arkasından küçük harfle devam eden paragraf: bu satır cümlenin başıdır, başlık değil
+            sonraki["metin"] = o["metin"] + " " + sonraki["metin"]
+            continue
+        if o["tur"] == "baslik" and not anlamli_baslik(o["metin"]):
+            o = dict(o, tur="p")
+            yazi = SAYFA_ISARET.sub("", o["metin"]).strip()
+            onceki = out[-1] if out else None
+            if onceki and onceki["tur"] == "p" and yazi[:1].islower() and not onceki["metin"].endswith(END_PUNCT):
+                onceki["metin"] += " " + o["metin"]
+                continue
+        out.append(o)
+    return out
+
+
 def _seviyeler(ogeler):
     """Başlık seviyesi (en çok 3). Metin katmanında punto güvenilir: boylardan. OCR'da satır yüksekliği harflere göre
     oynar: önce yazım biçimi (TAMAMI BÜYÜK HARF üst seviye), aynı biçim içinde %20'den büyük punto farkı."""
@@ -701,6 +774,7 @@ def _konumlar(metin):
 
 
 def kitaba_cevir(ogeler, notlar, kunye):
+    ogeler = _basliklari_denetle(ogeler)
     _seviyeler(ogeler)
     ogeler = _basliklari_birlestir(ogeler)
     ogeler = [o for o in ogeler if SAYFA_ISARET.sub("", o["metin"]).strip() or SAYFA_ISARET.search(o["metin"])]
@@ -799,6 +873,29 @@ def _benzer(a, b):
     return bool(ka and kb) and len(ka & kb) / min(len(ka), len(kb)) >= 0.5
 
 
+def _kunye_sec(bilgi, ad_baslik, ad_yazar, dosya_koku):
+    """Eser adı: kapaktaki başlık (Türkçe harfleriyle; dosya adıyla uyuşuyorsa) > PDF/EPUB bilgi alanı (dosya adının
+    kopyası değilse) > dosya adı. Yazar: bilgi alanı (eser adıyla aynı değilse) > dosya adındaki 'Yazar - Eser'."""
+    from .katalog import sade
+    # bilgi alanı ancak dosya adındaki "Yazar - Eser"in birleşik kopyasıysa atılır; sadece eser adıysa (çoğu zaman
+    # Türkçe harfleriyle daha doğru yazılmıştır) tercih edilir
+    kopya = lambda s: bool(ad_yazar) and sade(s) == sade(ad_yazar + " " + ad_baslik)
+    meta_b = bilgi.get("baslik") if _anlamli(bilgi.get("baslik")) else ""
+    meta_y = bilgi.get("yazar") if _anlamli(bilgi.get("yazar")) else ""
+    kapak = bilgi.get("kapak_baslik") or ""
+    if kapak and (_benzer(kapak, ad_baslik) or not ad_yazar):
+        baslik = turkce_baslik(kapak)
+    elif meta_b and not kopya(meta_b):
+        baslik = meta_b
+    else:
+        baslik = ad_baslik
+    if meta_y and not kopya(meta_y) and sade(meta_y) != sade(baslik) and sade(baslik) not in sade(meta_y):
+        yazar = meta_y
+    else:
+        yazar = ad_yazar
+    return baslik, yazar
+
+
 def _dosya_adindan(yol):
     ad = os.path.splitext(os.path.basename(yol))[0]
     ad = re.sub(r"[_]+", " ", ad).strip()
@@ -823,11 +920,10 @@ def cevir(yol, ilerleme=None, kaynak_bilgi=None):
     if ilerleme:
         ilerleme("Metin düzeltiliyor")
     ad_baslik, ad_yazar = _dosya_adindan(yol)
+    baslik, yazar = _kunye_sec(bilgi, ad_baslik, ad_yazar, os.path.splitext(os.path.basename(yol))[0])
     kunye = {
-        "baslik": {"tr": bilgi["baslik"] if _anlamli(bilgi.get("baslik")) else
-                   turkce_baslik(bilgi["kapak_baslik"]) if bilgi.get("kapak_baslik") and
-                   (_benzer(bilgi["kapak_baslik"], ad_baslik) or not ad_yazar) else ad_baslik},
-        "yazar": {"tr": bilgi["yazar"] if _anlamli(bilgi.get("yazar")) else ad_yazar},
+        "baslik": {"tr": baslik},
+        "yazar": {"tr": yazar},
         "asil_dil": "tr",
         "kaynak": {"tur": "dosya", "ad": os.path.basename(yol), **(kaynak_bilgi or {})},
         "sayfa_kaynagi": "basılı baskı" if uzanti == ".pdf" else "",

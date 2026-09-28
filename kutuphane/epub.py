@@ -4,6 +4,7 @@ diller: gösterilecek diller sırasıyla, ör. ["tr"], ["osm"], ["tr", "osm"], [
 İlk dil ana dildir: sayfa listesi, fihrist ve okuma yönü ondan alınır.
 """
 import datetime
+import math
 import html
 import io
 import os
@@ -92,6 +93,9 @@ class _Uretici:
         self.not_no = {}   # n0003 -> 1, 2, 3 (görünüş sırasıyla)
         self.sayfa_listesi = []  # (etiket, href)
         self.fihrist = []  # (seviye, etiket, href)
+        self.numarali = kit["kunye"].get("asil_dil") == "tr"  # elindeki kitaplar: "Bölüm 001 · 5-20 · Başlık"
+        self.bolum_no = 0
+        self._sayfa_basi = self._sayfa_haritasi()
 
     def _kunye_baslik(self, d):
         b = self.k["kunye"]["baslik"]
@@ -103,7 +107,7 @@ class _Uretici:
         if goster:
             self.sayfa_listesi.append((etiket, f"{dosya}#{sid}"))
             return (f'<span class="sayfa" epub:type="pagebreak" role="doc-pagebreak" id="{sid}" '
-                    f'aria-label="{X(etiket)}">{"" if gizli else X(etiket)}</span>')
+                    f'aria-label="{X(etiket)}"></span>')  # görünmez: sadece "sayfaya git" için
         return ""
 
     def _metin(self, b, d, dosya, sayfa_goster):
@@ -144,7 +148,8 @@ class _Uretici:
 
     # ---------- bölümler ----------
     def bolumler(self):
-        """Bloklar 1. seviye başlıklardan dosyalara bölünür."""
+        """Bloklar 1. seviye başlıklardan dosyalara bölünür. Numaralı fihristte (Türkçe asıllı kitaplar) uzun,
+        başlıksız kısımlar ~20 sayfalık eşit parçalara bölünür."""
         gruplar, cur = [], []
         for b in self.k["bloklar"]:
             if b["tur"] == "baslik" and b.get("seviye", 1) == 1 and cur:
@@ -153,11 +158,82 @@ class _Uretici:
             cur.append(b)
         if cur:
             gruplar.append(cur)
-        return gruplar
+        if not self.numarali:
+            return gruplar
+        out = []
+        for g in gruplar:
+            sayfa = [self._sayfa_basi.get(b["id"]) for b in g]
+            sayilar = [int(x) for x in sayfa if x and x.isdigit()]
+            if sayilar and max(sayilar) - min(sayilar) > 30:
+                aralik = max(sayilar) - min(sayilar)
+                boy = math.ceil(aralik / math.ceil(aralik / 20))
+                parca, bas = [], None
+                for b, sy in zip(g, sayfa):
+                    n = int(sy) if sy and sy.isdigit() else None
+                    if bas is None:
+                        bas = n
+                    if parca and b["tur"] == "p" and n is not None and bas is not None and n - bas >= boy:
+                        out.append(parca)
+                        parca, bas = [], n
+                    parca.append(b)
+                if parca:
+                    out.append(parca)
+            elif not sayilar and sum(len(b["metin"].get(self.ana) or "") for b in g) > 60000:
+                parca, uz = [], 0  # sayfa bilgisi yoksa uzunluğa göre
+                for b in g:
+                    if parca and b["tur"] == "p" and uz > 40000:
+                        out.append(parca)
+                        parca, uz = [], 0
+                    parca.append(b)
+                    uz += len(b["metin"].get(self.ana) or "")
+                out.append(parca)
+            else:
+                out.append(g)
+        return out
+
+    def _sayfa_haritasi(self):
+        """Her bloğun başında geçerli olan basılı sayfa."""
+        harita, gecerli = {}, None
+        for b in self.k["bloklar"]:
+            for s in b.get("sayfalar", []):
+                if (s.get("konum") or {}).get(self.k["kunye"].get("asil_dil", "tr"), 0) == 0:
+                    gecerli = s["no"]
+            harita[b["id"]] = gecerli
+            for s in b.get("sayfalar", []):
+                gecerli = s["no"]
+        return harita
+
+    def _bolum_etiketi(self, bloklar, baslik):
+        """'Bölüm 001 · 5-20 · Giriş' (başlık yoksa 'Bölüm 002 · 21-34'); Osmanlıcada Osmanlıca rakamlarla."""
+        self.bolum_no += 1
+        bas = self._sayfa_basi.get(bloklar[0]["id"])
+        son = bas
+        for b in bloklar:
+            for s in b.get("sayfalar", []):
+                son = s["no"]
+        osm = self.ana == "osm"
+        rakam = (lambda x: x.translate(str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩"))) if osm else (lambda x: x)
+        parcalar = [("بولوم " if osm else "Bölüm ") + rakam(f"{self.bolum_no:03d}")]
+        if bas:
+            parcalar.append(rakam(bas if not son or son == bas else f"{bas}-{son}"))
+        if baslik:
+            parcalar.append(baslik)
+        return " · ".join(parcalar)
 
     def bolum_xhtml(self, bloklar, dosya):
         self.bolum_notlari = {}
         govde, onceki_seviye, ilk_baslik = [], 0, None
+        bolum_basligi = None
+        if self.numarali:
+            ilk = bloklar[0]
+            baslik = None
+            if ilk["tur"] == "baslik":
+                baslik = K.NOT_ISARETI.sub("", ilk["metin"].get(self.ana) or next((v for v in ilk["metin"].values() if v), "")).strip()
+                bolum_basligi = ilk["id"]
+            etiket = self._bolum_etiketi(bloklar, baslik)
+            self.fihrist.append((1, etiket, dosya))
+            ilk_baslik = etiket
+            onceki_seviye = 1
         for b in bloklar:
             if b["tur"] == "baslik":
                 seviye = min(b.get("seviye", 1), onceki_seviye + 1) if self.fihrist else 1
@@ -171,7 +247,11 @@ class _Uretici:
                     parcalar.append(ic if i == 0 else f'<span class="ikinci"{_attr(d)}>{ic}</span>')
                 etiket = b["metin"].get(self.ana) or next((v for v in b["metin"].values() if v), "")
                 etiket = K.NOT_ISARETI.sub("", etiket).strip()
-                self.fihrist.append((seviye, etiket, f"{dosya}#{hid}"))
+                if self.numarali:
+                    seviye = max(2, seviye)
+                    onceki_seviye = seviye
+                if b["id"] != bolum_basligi:  # bölümü açan başlık bölüm satırında yazılı
+                    self.fihrist.append((seviye, etiket, f"{dosya}#{hid}"))
                 ilk_baslik = ilk_baslik or etiket
                 hs = min(seviye, 6)
                 govde.append(f'<h{hs} id="{hid}">{"".join(parcalar)}</h{hs}>')
@@ -219,39 +299,12 @@ class _Uretici:
                 break
         yazar = ku.get("yazar", {})
         y = yazar.get(self.ana) or yazar.get("tr") or yazar.get(asil) or yazar.get("lat")
-        if y:
+        if y and y != self.baslik:  # yazar adı eser adıyla aynıysa tekrar yazılmaz
             yd = self.ana if yazar.get(self.ana) else ("tr" if yazar.get("tr") else asil)
             satir.append(f"<p{_attr(yd) if yazar.get(yd) == y else ''}>{X(y)}</p>")
-        if ku.get("vefat_hicri"):
-            satir.append(f"<p{_attr('tr')}>(v. {ku['vefat_hicri']} h.)</p>")
-        kucuk = []
-        kay = ku.get("kaynak", {})
-        diller_ad = ", ".join(_dil(d)[2] for d in self.diller)
-        kucuk.append(f"Bu sürüm: {X(diller_ad)}")
-        if kay.get("tur") == "openiti":
-            kucuk.append("Asıl metin: Open Islamicate Texts Initiative (OpenITI), " + X(kay.get("kimlik", "")))
-        if kay.get("tur") == "dosya":
-            kucuk.append("Kaynak: kişisel kopya (" + X(kay.get("ad", "")) + ")")
-            cik = ku.get("cikarma") or {}
-            if cik.get("ocr"):
-                kucuk.append(f"Metin OCR ile okundu ({cik['ocr']}/{cik.get('sayfa') or cik['ocr']} sayfa); "
-                             "okuma hataları kalmış olabilir.")
-        if kay.get("baski"):
-            kucuk.append(f"Kaynak baskı: <span{_attr(asil)}>{X(kay['baski'])}</span>")
-        if ku.get("sayfa_kaynagi"):
-            if asil == "tr":
-                kucuk.append("Sayfa numaraları basılı baskıya göredir" +
-                             ("; Osmanlıcada yaklaşık yerdedir." if "osm" in self.diller else "."))
-            else:
-                kucuk.append("Sayfa numaraları bu baskıya göredir; çeviride yaklaşık yerdedir.")
-        if asil == "tr" and "osm" in self.diller:
-            kucuk.append("Osmanlıca metin, Türkçeden otomatik harf çevirisidir.")
-        if kay.get("lisans"):
-            kucuk.append("Lisans: " + X(kay["lisans"]) + " — ticari olmayan kişisel kullanım içindir.")
-        if any(d != asil for d in self.diller) and asil in ("ar", "en", "fr", "fa"):
-            kucuk.append("Türkçe ve Osmanlıca metin makine çevirisidir; ilmî alıntıda asıl metne başvurunuz.")
-        kucuk.append("Dedplay Kütüphane ile hazırlandı · " + datetime.date.today().isoformat())
-        satir.append(f'<div class="kucuk"{_attr("tr")}>' + "".join(f"<p>{k}</p>" for k in kucuk) + "</div>")
+        # künyede sadece ad ve yazar; OpenITI lisansı kaynağın yazılmasını şart koşar
+        if ku.get("kaynak", {}).get("tur") == "openiti":
+            satir.append(f'<div class="kucuk"{_attr("tr")}><p>Metin: OpenITI · CC BY-NC-SA 4.0</p></div>')
         return self._sayfa("Künye", '<section class="kunye" epub:type="frontmatter">' + "".join(satir) + "</section>")
 
     def kapak_xhtml(self):

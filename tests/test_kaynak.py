@@ -66,8 +66,41 @@ for ek, diller in depo.surumler(kit):
         d = epubcheck.denetle(yol)
         ok(d["hata"] == 0 and d["uyari"] == 0, f"EPUB {ek}: epubcheck 0 hata 0 uyarı {d['mesajlar'][:2]}")
 kunye = zipfile.ZipFile(os.path.join(klasor, "turkce-osmanlica.epub")).read("OEBPS/metin/kunye.xhtml").decode()
-ok("kişisel kopya" in kunye and "otomatik harf çevirisidir" in kunye, "Künye: kaynak ve Osmanlıca notu")
+ok("kişisel kopya" not in kunye and "OCR" not in kunye and "İtikadda Orta Yol" in kunye, "Künye: sadece ad ve yazar")
+bolum = zipfile.ZipFile(os.path.join(klasor, "turkce.epub")).read("OEBPS/metin/bolum_001.xhtml").decode()
+ok('role="doc-pagebreak"' in bolum and 'aria-label="5"></span>' in bolum, "Sayfa numarası görünmez işaret olarak duruyor")
+ok(kaynak._kunye_sec({"baslik": "Imam Gazali Itikatta Sozun Ozu", "yazar": "Imam Gazali Itikatta Sozun Ozu", "kapak_baslik": ""},
+                     "Itikatta Sozun Ozu", "Imam Gazali", "Imam Gazali - Itikatta Sozun Ozu") == ("Itikatta Sozun Ozu", "Imam Gazali"),
+   "Künye: dosya adının kopyası olan bilgi alanı yok sayılır")
+ok(kaynak._kunye_sec({"baslik": "", "yazar": "", "kapak_baslik": "İTİKATTA SÖZÜN ÖZÜ"}, "Itikatta Sozun Ozu", "Imam Gazali",
+                     "x")[0] == "İtikatta Sözün Özü", "Künye: kapaktaki başlık Türkçe harfleriyle")
 ok(kaynak.turkce_baslik("İTİKADDA ORTA YOL VE İLİM") == "İtikadda Orta Yol ve İlim", "Türkçe büyük/küçük harf")
+
+# başlık denetimi: gerçek kitaptaki OCR çöpü fihriste girmez
+COP = ['Ti EAA NİL ye" sir', 'Çİ eler İLANİ JS LE Aİ Jp', 'PAS TAİ Kan yay', 'â) ş ya az Lüle WAR', 'şöyle PARA iye', 'EA Pe)', 'TIRE',
+       'SURU pil sani Gİ KİSİ LA GN öl', '5) Moral YS yal iy Ol»', 'sağ LEŞ ELLİ Ği', 'EĞEN ğ', 'kB aE', 'Alü alli', 'Pat', 'haldir.',
+       'vaciptir.”', '#0 O »', "“Haceru'l-Esved, yeryüzünde Cenab-ı Hakk'ın"]
+IYI = ['GİRİŞ', 'BİRİNCİ BÖLÜM', 'İlmin Şerefi', 'Kelâmın Önemi', 'ÖNSÖZ', "Allah'ın Varlığı", 'Ruh ve Beden', 'Kısım II',
+       'Resulullah (S.A.V.) Efendimizin Hadis-i Şerifine', "Birinci Kutup: Allah'ın Zatı Hakkında", 'II. BÖLÜM']
+ok(not [t for t in COP if kaynak.anlamli_baslik(t)], "Başlık denetimi: OCR çöpü başlık sayılmaz")
+ok(all(kaynak.anlamli_baslik(t) for t in IYI), "Başlık denetimi: gerçek başlıklar tanınır")
+
+# numaralı fihrist: Bölüm 001 · 5-20 · Başlık
+import io, re
+kit = K.yeni({"baslik": {"tr": "Deneme"}, "yazar": {"tr": ""}, "asil_dil": "tr", "kaynak": {"tur": "dosya"}})
+def _p(no):
+    K.blok_ekle(kit, "p", {"tr": "Metin."}, sayfalar=[{"no": str(no), "konum": {"tr": 0}}])
+_p(1); _p(4)
+K.blok_ekle(kit, "baslik", {"tr": "GİRİŞ"}, seviye=1, sayfalar=[{"no": "5", "konum": {"tr": 0}}])
+for n in range(6, 21):
+    _p(n)
+K.blok_ekle(kit, "baslik", {"tr": "BİRİNCİ BÖLÜM"}, seviye=1, sayfalar=[{"no": "21", "konum": {"tr": 0}}])
+for n in range(22, 92):
+    _p(n)
+nav = zipfile.ZipFile(io.BytesIO(epub.uret(kit, ["tr"]))).read("OEBPS/nav.xhtml").decode().split('epub:type="toc"')[1].split("</nav>")[0]
+etiketler = re.findall(r'<a href="[^"]+">([^<]+)</a>', nav)
+ok(etiketler == ["Bölüm 001 · 1-4", "Bölüm 002 · 5-20 · GİRİŞ", "Bölüm 003 · 21-38 · BİRİNCİ BÖLÜM", "Bölüm 004 · 39-56",
+                 "Bölüm 005 · 57-74", "Bölüm 006 · 75-91"], f"Numaralı fihrist ve uzun bölümün bölünmesi {etiketler}")
 
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)
