@@ -174,6 +174,7 @@ async function servisler() {
     const ekle = (ad, ok) => kutu.append(E("span", {}, E("i", { class: "dot " + (ok ? "ok" : "bad") }), ad));
     for (const [ad, ok] of Object.entries(d.servisler)) ekle(ad, ok);
     ekle("epubcheck", d.epubcheck);
+    ekle("Kitaplar klasörü", d.cikti);
     kutu.append(E("span", {}, "sürüm " + d.surum));
   } catch (e) { $("#servisler").textContent = "Durum alınamadı: " + e.message; }
 }
@@ -308,7 +309,27 @@ async function ayrinti(kid, li) {
       E("a", { href: `/api/kitaplar/${encodeURIComponent(kid)}/epub/${encodeURIComponent(e.dosya)}` }, e.diller.map(x => adlar[x] || x).join(" + ")),
       E("span", { class: "meta" }, boyut(e.boyut)), rozet));
   }
+  if (d.durum.cikti?.length) epKutu.append(E("p", { class: "meta" }, E("span", {}, "Kitaplar klasöründe: " + d.durum.cikti.join(", "))));
+  else if (d.durum.cikti_uyari) epKutu.append(E("p", { class: "uyari" }, d.durum.cikti_uyari));
   kutu.append(epKutu);
+  if (ep.length) {
+    const st = d.durum.studyo;
+    const gonder = E("button", { class: "btn" + (st ? " ghost" : ""), type: "button" }, st ? "Stüdyo'ya yeniden gönder" : "Stüdyo'ya gönder");
+    const bilgi = E("p", { class: "meta", "aria-live": "polite" });
+    const stBag = n => E("a", { href: `http://${location.hostname}:8070/`, target: "_blank", rel: "noopener" }, `Stüdyo'da aç (iş #${n})`);
+    if (st) bilgi.append(`Gönderildi: ${new Date(st.tarih * 1000).toLocaleString("tr-TR")} · `, stBag(st.is));
+    gonder.onclick = async () => {
+      if (st && !confirm("Bu kitap Stüdyo'ya daha önce gönderilmiş. Düzeltmelerle yeniden gönderilsin mi? (Stüdyo'da yeni bir iş açılır)")) return;
+      gonder.disabled = true; bilgi.replaceChildren("Gönderiliyor…");
+      try { const v = await api(`/api/kitaplar/${encodeURIComponent(kid)}/studyo`, { method: "POST" });
+            bilgi.replaceChildren(`Gönderildi (${v.parca} parça). Stüdyo seslendirip PDF, Word, HTML ve TXT biçimlerini üretecek · `, stBag(v.is)); }
+      catch (e) { bilgi.replaceChildren(e.message); }
+      gonder.disabled = false;
+    };
+    kutu.append(E("div", {}, E("h3", {}, "Seslendirme ve öteki biçimler"),
+      E("p", { class: "meta" }, "Kitap, düzeltmelerinle birlikte Stüdyo'ya gider; ses ve biçimler Stüdyo'nun çıktı klasörüne kaydedilir."),
+      E("div", { class: "alt" }, gonder), bilgi));
+  }
   if (d.fihrist?.length) {
     const ol = E("ol");
     const trKitap = d.kunye?.asil_dil === "tr"; if (trKitap) ol.style.direction = "ltr";

@@ -18,7 +18,7 @@ import unicodedata
 import requests
 
 from . import epub as EPUB
-from . import epubcheck, kaynak, katalog, openiti, osmanlica
+from . import cikti, epubcheck, kaynak, katalog, openiti, osmanlica
 from . import kitap as K
 
 VERI = os.environ.get("DATA_DIR", "/data")
@@ -73,6 +73,7 @@ def liste():
             continue
         d = durum_oku(kid)
         out.append({"kimlik": kid, **{k: d.get(k) for k in ("baslik", "baslik_asil", "yazar", "asama", "hata", "uyari", "guncellendi",
+                                                            "cikti", "cikti_uyari", "studyo",
                                                             "eklendi", "epublar")}})
     return sorted(out, key=lambda x: -(x.get("eklendi") or 0))
 
@@ -132,6 +133,11 @@ def epub_uret(kid):
                       "denetim": dn})
     shutil.rmtree(ek, ignore_errors=True)  # hepsi başarıyla üretildikten sonra eskiler kalkar
     os.replace(gecici, ek)
+    try:  # dil klasörlerine (Türkçe/, Osmanlıca/, Türkçe-Osmanlıca/ ...)
+        yazilan = cikti.ciktiya_yaz(kit, sonuc, ek, durum_oku(kid).get("cikti"))
+        durum_yaz(kid, cikti=yazilan, cikti_uyari=None if yazilan is not None else "Çıktı klasörü bağlı değil")
+    except Exception as e:
+        durum_yaz(kid, cikti_uyari=f"Çıktı klasörüne yazılamadı: {type(e).__name__}: {str(e)[:120]}")
     ku = kit["kunye"]
     durum_yaz(kid, epublar=sonuc, asama="hazır", hata=None,
               baslik=ku["baslik"].get("tr") or ku["baslik"].get(ku.get("asil_dil", "ar")),

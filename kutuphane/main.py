@@ -9,13 +9,13 @@ from pydantic import BaseModel
 
 from fastapi import File, UploadFile
 
-from . import depo, epub, epubcheck, katalog, kaynak, osmanlica
+from . import cikti, depo, epub, epubcheck, katalog, kaynak, osmanlica
 from . import kitap as K
 
 KAYNAK = os.environ.get("KAYNAK_DIR", "/kaynak")
 UZANTILAR = (".pdf", ".epub", ".docx", ".txt")
 
-SURUM = "0.3.1"
+SURUM = "0.4.0"
 STATIK = os.path.join(os.path.dirname(__file__), "static")
 HOST = "http://host.docker.internal"
 SERVISLER = {
@@ -47,7 +47,7 @@ def durum():
         except Exception:
             s[ad] = False
     kat = os.path.join(depo.VERI, "openiti", "katalog.csv")
-    return {"surum": SURUM, "epubcheck": epubcheck.var_mi(), "servisler": s,
+    return {"surum": SURUM, "epubcheck": epubcheck.var_mi(), "servisler": s, "cikti": os.path.isdir(cikti.CIKTI),
             "katalog": os.path.exists(kat), "katalog_tarih": int(os.path.getmtime(kat)) if os.path.exists(kat) else None}
 
 
@@ -257,6 +257,22 @@ def kitap_sil(kid: str):
         raise HTTPException(409, "Kitap şu an işleniyor; bitince silebilirsiniz")
     depo.sil(kid)
     return {"ok": True}
+
+
+@app.post("/api/kitaplar/{kid}/studyo")
+def studyoya_gonder(kid: str):
+    kit = _kitap(kid)
+    d = depo.durum_oku(kid)
+    if d.get("asama") not in ("hazır", "hata") or not d.get("epublar"):
+        raise HTTPException(409, "Kitap henüz hazır değil")
+    try:
+        sonuc = cikti.studyoya_gonder(kit)
+    except requests.RequestException as e:
+        raise HTTPException(503, f"Stüdyo'ya ulaşılamadı: {type(e).__name__}")
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+    depo.durum_yaz(kid, studyo=sonuc)
+    return sonuc
 
 
 # ---------------- Okuma ve düzeltme ----------------

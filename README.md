@@ -23,10 +23,15 @@ Sürümler:
   düzeltilmiş Osmanlıca korunur), paragraf/başlık dönüşümü, silme; her değişiklik "Geri al" ile döner.
   EPUB'lar düzeltmelerden sonra arka planda yeniden üretilir.
 
+- 0.4: Hazır EPUB'lar Kitaplar klasörüne dile göre (Türkçe/, Osmanlıca/, Türkçe-Osmanlıca/, Arapça/) yazılır.
+  "Stüdyo'ya gönder": bölümler Türkçe + düzeltilmiş Osmanlıca hazır parçalar olarak Stüdyo'ya gider (Stüdyo'da
+  /api/jobs/from-kutuphane); Stüdyo seslendirir ve PDF, Word, HTML, TXT biçimlerini kendi çıktı klasörüne kaydeder.
+
 Testler (sunucuda, kod klasöründe):
     docker run --rm -v "$PWD":/k -w /k berzahbey/dedplay-kutuphane:latest python tests/test_temel.py
     docker run --rm -v "$PWD":/k -w /k -e PYTHONPATH=/app berzahbey/dedplay-kutuphane:latest python tests/test_kaynak.py
     docker run --rm -v "$PWD":/k -w /k berzahbey/dedplay-kutuphane:latest python tests/test_okuma.py
+    docker run --rm -v "$PWD":/k -w /k berzahbey/dedplay-kutuphane:latest python tests/test_studyo.py
 
 Sırada: taranmış Türkçe kitaplardaki Arapça satırların Arapça OCR'ı, Arapça eserlerin çevirisi (gemma3:27b).
 

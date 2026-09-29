@@ -18,3 +18,8 @@ services:
         source: /media/ZimaOS-HD/Kitap
         target: /kaynak
         read_only: true
+      - type: bind  # hazır EPUB'lar dile göre: Türkçe/, Osmanlıca/, Türkçe-Osmanlıca/
+        source: /media/ZimaOS-HD/Media/Kitaplar
+        target: /cikti
+        bind:
+          create_host_path: true
