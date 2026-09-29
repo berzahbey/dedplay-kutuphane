@@ -93,6 +93,12 @@ def _birlestir(sablon, cevrilmis):
     return "".join(out)
 
 
+def blok_cevir(metin):
+    """Tek bir paragraf (okuma ekranında düzeltilen Türkçe): dipnot işaretleri korunarak Osmanlıcaya."""
+    sablon, parcalar = _parcala(metin)
+    return _birlestir(sablon, _parti(parcalar)) if parcalar else metin
+
+
 def kunye_cevir(kit):
     """Sadece kitap adı ve yazar (künye düzeltilince bütün kitabı yeniden çevirmeye gerek yok)."""
     alanlar = [a for a in ("baslik", "yazar") if kit["kunye"].get(a, {}).get("tr")]

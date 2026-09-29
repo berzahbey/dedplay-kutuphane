@@ -17,10 +17,17 @@ Sürümler:
   korunur; Stüdyo'nun düzeltmeleri (Zemberek harf onarımı vb.) uygulanır; Osmanlıca çeviriciyle Türkçe,
   Osmanlıca ve iki dilli EPUB üretilir.
 
+- 0.2.1-0.2.2: fihrist "Bölüm 001 (5-20) Başlık", OCR çöpü başlık denetimi, sayfa numarası denetimi, sade künye.
+- 0.3: Okuma ve düzeltme ekranı (/oku/<kitap>): Türkçe, Osmanlıca ya da ikisi; fihrist çekmecesi; kaldığın yer
+  sunucuda (başka cihazdan devam). Düzelt kipinde paragraf düzeltme (Türkçe düzelince Osmanlıcası yenilenir, elle
+  düzeltilmiş Osmanlıca korunur), paragraf/başlık dönüşümü, silme; her değişiklik "Geri al" ile döner.
+  EPUB'lar düzeltmelerden sonra arka planda yeniden üretilir.
+
 Testler (sunucuda, kod klasöründe):
     docker run --rm -v "$PWD":/k -w /k berzahbey/dedplay-kutuphane:latest python tests/test_temel.py
     docker run --rm -v "$PWD":/k -w /k -e PYTHONPATH=/app berzahbey/dedplay-kutuphane:latest python tests/test_kaynak.py
+    docker run --rm -v "$PWD":/k -w /k berzahbey/dedplay-kutuphane:latest python tests/test_okuma.py
 
-Sırada: okuma ve düzeltme ekranı, fihrist düzenleme, Arapça eserlerin çevirisi (gemma3:27b).
+Sırada: taranmış Türkçe kitaplardaki Arapça satırların Arapça OCR'ı, Arapça eserlerin çevirisi (gemma3:27b).
 
 OpenITI metinleri CC BY-NC-SA 4.0 lisanslıdır; üretilen EPUB'lar kişisel, ticari olmayan kullanım içindir.

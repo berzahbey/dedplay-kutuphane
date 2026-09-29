@@ -9,13 +9,13 @@ from pydantic import BaseModel
 
 from fastapi import File, UploadFile
 
-from . import depo, epubcheck, katalog, kaynak
+from . import depo, epub, epubcheck, katalog, kaynak, osmanlica
 from . import kitap as K
 
 KAYNAK = os.environ.get("KAYNAK_DIR", "/kaynak")
 UZANTILAR = (".pdf", ".epub", ".docx", ".txt")
 
-SURUM = "0.2.2"
+SURUM = "0.3.0"
 STATIK = os.path.join(os.path.dirname(__file__), "static")
 HOST = "http://host.docker.internal"
 SERVISLER = {
@@ -256,6 +256,136 @@ def kitap_sil(kid: str):
     if d.get("asama") not in ("hazır", "hata"):
         raise HTTPException(409, "Kitap şu an işleniyor; bitince silebilirsiniz")
     depo.sil(kid)
+    return {"ok": True}
+
+
+# ---------------- Okuma ve düzeltme ----------------
+@app.get("/oku/{kid}", response_class=HTMLResponse)
+def oku_sayfasi(kid: str):
+    return open(os.path.join(STATIK, "oku.html"), encoding="utf-8").read()
+
+
+def _okuma_dili(kit):
+    d = K.diller(kit)
+    return "tr" if "tr" in d else (d[0] if d else kit["kunye"].get("asil_dil", "tr"))
+
+
+@app.get("/api/kitaplar/{kid}/oku")
+def oku_bilgi(kid: str):
+    kit = _kitap(kid)
+    yapi = epub.bolum_yapisi(kit, _okuma_dili(kit))
+    d = depo.durum_oku(kid)
+    return {"kimlik": kid, "kunye": kit["kunye"], "diller": K.diller(kit),
+            "bolumler": [{"no": i, "etiket": b["etiket"], "alt": b["alt"], "blok": len(b["bloklar"])} for i, b in enumerate(yapi)],
+            "konum": d.get("konum") or {"bolum": 0, "blok": None}, "asama": d.get("asama")}
+
+
+def _blok_ozeti(b):
+    sayfa = next((s["no"] for s in b.get("sayfalar", [])), None)
+    return {"id": b["id"], "tur": b["tur"], "seviye": b.get("seviye"), "metin": b["metin"], "silindi": bool(b.get("silindi")),
+            "elle": b.get("elle") or {}, "gecmis": len(b.get("gecmis", [])), "sayfa": sayfa}
+
+
+@app.get("/api/kitaplar/{kid}/bolum/{no}")
+def oku_bolum(kid: str, no: int):
+    kit = _kitap(kid)
+    yapi = epub.bolum_yapisi(kit, _okuma_dili(kit))
+    if not 0 <= no < len(yapi):
+        raise HTTPException(404, "Böyle bir bölüm yok")
+    ids = set(yapi[no]["bloklar"])
+    bloklar = [_blok_ozeti(b) for b in kit["bloklar"] if b["id"] in ids]
+    atif = set()
+    for b in bloklar:
+        for t in b["metin"].values():
+            atif |= set(K.NOT_ISARETI.findall(t or ""))
+    notlar = {g: n["metin"] for g, n in kit.get("dipnotlar", {}).items() if g in atif}
+    sira = {g: i + 1 for i, g in enumerate(kit.get("dipnotlar", {}))}
+    return {"no": no, "etiket": yapi[no]["etiket"], "bloklar": bloklar, "dipnotlar": notlar,
+            "not_no": {g: sira[g] for g in notlar}, "toplam": len(yapi)}
+
+
+class BlokDegisiklik(BaseModel):
+    dil: str | None = None
+    metin: str | None = None
+    tur: str | None = None
+    seviye: int | None = None
+    silindi: bool | None = None
+
+
+def _duzenle(kid, islem):
+    """kitap.json'u kilit altında yükle-değiştir-kaydet; sonra EPUB'ları yeniden üretmeyi kuyruğa koy."""
+    kilit = depo.kitap_kilidi(kid)
+    if not kilit.acquire(timeout=3):
+        raise HTTPException(409, "Kitap şu an arka planda işleniyor; biraz sonra tekrar dene")
+    try:
+        kit = _kitap(kid)
+        sonuc = islem(kit)
+        K.kaydet(kit, depo.kitap_yolu(kid))
+    finally:
+        kilit.release()
+    depo.is_ekle("epub", kid, tur="epub")
+    return sonuc
+
+
+@app.patch("/api/kitaplar/{kid}/blok/{bid}")
+def blok_duzelt(kid: str, bid: str, g: BlokDegisiklik):
+    uyari = []
+
+    def islem(kit):
+        try:
+            b = K.blok_bul(kit, bid)
+        except KeyError:
+            raise HTTPException(404, "Böyle bir paragraf yok")
+        if g.metin is not None:
+            dil = g.dil or "tr"
+            yeni = " ".join(g.metin.split())
+            if not yeni:
+                raise HTTPException(400, "Metin boş olamaz; satırı kaldırmak için 'Sil'i kullan")
+            eski = b["metin"].get(dil, "")
+            if sorted(K.NOT_ISARETI.findall(eski)) != sorted(K.NOT_ISARETI.findall(yeni)):
+                raise HTTPException(400, "Dipnot işaretleri ({{n…}}) değiştirilmemeli; metni işaretlere dokunmadan düzelt")
+            if K.duzelt(kit, bid, dil, yeni) and dil == "tr" and b["metin"].get("osm") is not None \
+                    and not b.get("elle", {}).get("osm"):
+                try:  # Türkçe düzeldi: Osmanlıcası da yenilenir (elle düzeltilmiş Osmanlıca korunur)
+                    osm_eski = b["metin"]["osm"]
+                    b["metin"]["osm"] = osmanlica.blok_cevir(yeni)
+                    b["gecmis"][-1]["osm_eski"] = osm_eski  # "Geri al" Osmanlıcayı da eski hâline döndürsün
+                except Exception as e:
+                    uyari.append(f"Osmanlıcası yenilenemedi ({type(e).__name__}); Türkçe kaydedildi")
+        if g.tur is not None:
+            try:
+                K.tur_degistir(kit, bid, g.tur, g.seviye)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        if g.silindi is not None:
+            K.sil(kit, bid, g.silindi)
+        return _blok_ozeti(K.blok_bul(kit, bid))
+    blok = _duzenle(kid, islem)
+    return {"blok": blok, "uyari": uyari}
+
+
+@app.post("/api/kitaplar/{kid}/blok/{bid}/geri")
+def blok_geri_al(kid: str, bid: str):
+    def islem(kit):
+        try:
+            if not K.geri_al(kit, bid):
+                raise HTTPException(400, "Geri alınacak bir değişiklik yok")
+        except KeyError:
+            raise HTTPException(404, "Böyle bir paragraf yok")
+        return _blok_ozeti(K.blok_bul(kit, bid))
+    return {"blok": _duzenle(kid, islem)}
+
+
+class Konum(BaseModel):
+    bolum: int
+    blok: str | None = None
+
+
+@app.put("/api/kitaplar/{kid}/konum")
+def konum_kaydet(kid: str, k: Konum):
+    if not depo.durum_oku(kid):
+        raise HTTPException(404, "Böyle bir kitap yok")
+    depo.durum_yaz(kid, konum={"bolum": k.bolum, "blok": k.blok})
     return {"ok": True}
 
 

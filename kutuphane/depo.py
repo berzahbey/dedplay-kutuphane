@@ -27,6 +27,14 @@ KIMLIK = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
 DIL_AD = {"ar": "arapca", "en": "ingilizce", "fr": "fransizca", "fa": "farsca"}
 _kuyruk = queue.Queue()
 _kilit = threading.Lock()
+_kitap_kilitleri = {}
+_bekleyen_epub = set()  # kuyrukta bekleyen EPUB işleri: art arda düzeltmelerde tek iş
+
+
+def kitap_kilidi(kid):
+    """kitap.json'u yazan her iş (arka plan ya da okuma ekranı) bu kilidi tutar: düzeltmeler kaybolmaz."""
+    with _kilit:
+        return _kitap_kilitleri.setdefault(kid, threading.Lock())
 
 
 def klasor(kid):
@@ -189,20 +197,24 @@ def durum_asama(kid, mesaj):
 def isci():
     while True:
         tur, kid, arg = _kuyruk.get()
+        with _kilit:
+            _bekleyen_epub.discard(kid)
         try:
-            if tur == "openiti":
-                _openiti_ekle(kid, arg)
-            elif tur == "dosya":
-                _dosya_ekle(kid, arg)
-            elif tur == "osmanlica":
-                _osmanlica(kid, zorla=bool(arg))
-            elif tur == "kunye":
-                kit = K.yukle(kitap_yolu(kid))
-                try:
-                    osmanlica.kunye_cevir(kit)
-                    K.kaydet(kit, kitap_yolu(kid))
-                except Exception as e:
-                    durum_yaz(kid, uyari=f"Künyenin Osmanlıcası çevrilemedi: {type(e).__name__}")
+            if tur in ("openiti", "dosya", "osmanlica", "kunye"):
+                with kitap_kilidi(kid):  # bu sırada okuma ekranından düzeltme yapılamaz
+                    if tur == "openiti":
+                        _openiti_ekle(kid, arg)
+                    elif tur == "dosya":
+                        _dosya_ekle(kid, arg)
+                    elif tur == "osmanlica":
+                        _osmanlica(kid, zorla=bool(arg))
+                    elif tur == "kunye":
+                        kit = K.yukle(kitap_yolu(kid))
+                        try:
+                            osmanlica.kunye_cevir(kit)
+                            K.kaydet(kit, kitap_yolu(kid))
+                        except Exception as e:
+                            durum_yaz(kid, uyari=f"Künyenin Osmanlıcası çevrilemedi: {type(e).__name__}")
             epub_uret(kid)
         except Exception as e:
             traceback.print_exc()
@@ -212,6 +224,11 @@ def isci():
 
 
 def is_ekle(is_turu, kid, arg=None, **durum):
+    with _kilit:
+        if is_turu == "epub" and kid in _bekleyen_epub:
+            return  # zaten kuyrukta: tek sefer üretilir
+        if is_turu == "epub":
+            _bekleyen_epub.add(kid)
     durum_yaz(kid, asama="sırada", hata=None, **durum)
     _kuyruk.put((is_turu, kid, arg))
 

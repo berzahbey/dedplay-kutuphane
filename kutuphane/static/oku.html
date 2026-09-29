@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Oku · Dedplay Kütüphane</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&family=Amiri:wght@400;700&display=swap" rel="stylesheet">
+<style>
+[hidden] { display: none !important; }
+:root {
+  --paper: #f6f3ec; --surface: #ffffff; --ink: #1f2a28; --muted: #66716e; --line: #ddd8cc;
+  --tile: #1b6e5a; --tile-soft: #e1efe9; --lapis: #2c4a7c; --danger: #9c3b2e; --amber: #9a6b00; --mark: #fff3c4;
+  --serif: "Literata", Georgia, serif; --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --arab: "Amiri", "Traditional Arabic", serif; --boy: 19px;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #141a18; --surface: #1c2421; --ink: #e2e8e5; --muted: #98a4a0; --line: #2f3b37;
+          --tile: #58bfa0; --tile-soft: #1e3a31; --lapis: #8fb0e6; --danger: #e08a7c; --amber: #e0b44f; --mark: #3b3520; }
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: calc(64px + env(safe-area-inset-top, 0px)); }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 var(--sans); }
+header { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: env(safe-area-inset-top, 0px) 12px 0; }
+.cubuk { max-width: 1000px; margin: 0 auto; display: flex; gap: 8px; align-items: center; min-height: 56px; }
+.cubuk .ad { flex: 1; min-width: 0; font: 600 1rem var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+a.geri, button.ara { font: 600 .9rem var(--sans); color: var(--ink); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 11px; cursor: pointer; text-decoration: none; white-space: nowrap; }
+button.ara[aria-pressed="true"] { background: var(--tile); color: var(--surface); border-color: var(--tile); }
+.diller { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.diller button { border: 0; background: var(--surface); color: var(--ink); font: 600 .85rem var(--sans); padding: 7px 10px; cursor: pointer; }
+.diller button[aria-pressed="true"] { background: var(--tile-soft); color: var(--tile); }
+button:focus-visible, a:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid var(--lapis); outline-offset: 2px; }
+main { max-width: 40em; margin: 0 auto; padding: 28px 20px calc(80px + env(safe-area-inset-bottom, 0px)); font-size: var(--boy); }
+h1.bolum { font: 600 1.35em/1.3 var(--serif); text-align: center; margin: .6em 0 1.4em; color: var(--muted); }
+.blok { position: relative; border-radius: 6px; }
+.blok p, .blok h2, .blok h3, .blok h4 { margin: 0; }
+.blok p { font-family: var(--serif); line-height: 1.7; text-indent: 1.4em; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+.blok + .blok { margin-top: .55em; }
+.blok h2, .blok h3, .blok h4 { font-family: var(--serif); text-align: center; line-height: 1.35; margin: 1.3em 0 .7em; }
+.blok h2 { font-size: 1.3em; } .blok h3 { font-size: 1.12em; } .blok h4 { font-size: 1em; }
+[dir="rtl"] { font-family: var(--arab) !important; line-height: 2 !important; font-size: 1.1em; }
+.blok .ikinci { margin-top: .35em; padding-top: .35em; border-top: 1px solid var(--line); }
+button.not { font: 600 .7em var(--sans); vertical-align: super; line-height: 0; border: 0; background: none; color: var(--lapis);
+  padding: 0 .15em; cursor: pointer; }
+.duzelt-kipi .blok { cursor: pointer; }
+.duzelt-kipi .blok:hover { background: var(--mark); box-shadow: 0 0 0 6px var(--mark); }
+.blok.silindi { opacity: .45; text-decoration: line-through; }
+.blok.silindi::before { content: "silindi"; position: absolute; left: -5.2em; top: .2em; font: .7rem var(--sans); color: var(--danger); }
+.blok .isaret { font: .7rem var(--sans); color: var(--amber); margin-left: .4em; }
+.editor { font-size: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: .6em 0 1em;
+  box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+.editor label { display: grid; gap: 4px; font-size: .8rem; color: var(--muted); margin-bottom: 8px; }
+.editor textarea { width: 100%; min-height: 7em; font: 1rem/1.6 var(--serif); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--paper); color: var(--ink); resize: vertical; }
+.editor textarea[dir="rtl"] { font-size: 1.15rem; }
+.editor .satir { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.editor select { font: .95rem var(--sans); padding: 7px; border-radius: 8px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+.editor .btn { font: 600 .9rem var(--sans); border-radius: 8px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--tile);
+  background: var(--tile); color: var(--surface); }
+.editor .btn.hafif { background: transparent; color: var(--tile); }
+.editor .btn.kirmizi { background: transparent; color: var(--danger); border-color: var(--danger); }
+.editor .bilgi { font-size: .8rem; color: var(--muted); margin: 6px 0 0; }
+.editor .hata { color: var(--danger); font-size: .85rem; margin: 6px 0 0; }
+nav.sayfalar { display: flex; justify-content: space-between; gap: 10px; margin-top: 2.5em; font-size: 16px; }
+.notkutu { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 8;
+  width: min(34em, calc(100% - 24px)); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.18); font: 15px/1.6 var(--serif); }
+.notkutu p { margin: .2em 0; }
+.cekmece { position: fixed; inset: 0; z-index: 9; display: flex; }
+.cekmece .perde { flex: 1; background: rgba(0,0,0,.35); }
+.cekmece aside { width: min(24em, 88vw); background: var(--surface); overflow-y: auto; padding: calc(16px + env(safe-area-inset-top, 0px)) 14px 24px;
+  border-right: 1px solid var(--line); order: -1; }
+.cekmece h2 { font: 600 1.05rem var(--serif); margin: 0 0 10px; }
+.cekmece ol { list-style: none; margin: 0; padding: 0; }
+.cekmece li button { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--ink); cursor: pointer;
+  font: .95rem/1.35 var(--sans); padding: 7px 8px; border-radius: 6px; }
+.cekmece li button:hover, .cekmece li button[aria-current="true"] { background: var(--tile-soft); }
+.cekmece li.alt button { padding-left: 22px; font-size: .88rem; color: var(--muted); }
+.durum { position: fixed; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); z-index: 7; font-size: .85rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; color: var(--muted); }
+@media (max-width: 640px) {
+  .cubuk { flex-wrap: wrap; padding-bottom: 8px; } .cubuk .ad { flex-basis: 100%; order: -1; padding-top: 6px; }
+  main { padding: 18px 16px calc(80px + env(safe-area-inset-bottom, 0px)); }
+  .blok.silindi::before { position: static; margin-right: .4em; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="cubuk">
+    <a class="geri" href="/">← Kütüphane</a>
+    <span class="ad" id="ad">Yükleniyor…</span>
+    <button class="ara" id="fihristBtn" type="button">Fihrist</button>
+    <span class="diller" id="diller" role="group" aria-label="Okuma dili"></span>
+    <button class="ara" id="kucult" type="button" aria-label="Yazıyı küçült">A−</button>
+    <button class="ara" id="buyut" type="button" aria-label="Yazıyı büyüt">A+</button>
+    <button class="ara" id="duzeltBtn" type="button" aria-pressed="false">Düzelt</button>
+  </div>
+</header>
+<main id="ana">
+  <h1 class="bolum" id="bolumAd"></h1>
+  <div id="metin"></div>
+  <nav class="sayfalar">
+    <button class="ara" id="onceki" type="button">← Önceki bölüm</button>
+    <button class="ara" id="sonraki" type="button">Sonraki bölüm →</button>
+  </nav>
+</main>
+<div class="cekmece" id="cekmece" hidden><div class="perde" id="perde"></div>
+  <aside aria-label="Fihrist"><h2>Fihrist</h2><ol id="fihrist"></ol></aside></div>
+<div class="notkutu" id="notkutu" hidden role="dialog" aria-live="polite"></div>
+<div class="durum" id="durum" hidden aria-live="polite"></div>
+<script>
+const $ = s => document.querySelector(s);
+const kid = decodeURIComponent(location.pathname.split("/").pop());
+const E = (tag, attrs = {}, ...kids) => {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") el.className = v; else if (k.startsWith("on")) el[k] = v; else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c != null) el.append(c.nodeType ? c : document.createTextNode(c));
+  return el;
+};
+async function api(yol, secenek = {}) {
+  const r = await fetch(yol, { headers: { "Content-Type": "application/json" }, ...secenek });
+  const v = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(v.detail || `Sunucu hatası (${r.status})`);
+  return v;
+}
+const sakla = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+const oku = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } };
+const YON = { tr: "ltr", osm: "rtl", ar: "rtl", fa: "rtl", en: "ltr", fr: "ltr" };
+const LANG = { tr: "tr", osm: "ota", ar: "ar", fa: "fa", en: "en", fr: "fr" };
+const ADLAR = { tr: "Türkçe", osm: "Osmanlıca", ar: "Arapça", en: "İngilizce", fr: "Fransızca" };
+let kitap = null, bolum = null, bolumNo = 0, gosterilen = [], duzeltKipi = false, acikEditor = null;
+
+function durumYaz(m, sure = 2500) {
+  const d = $("#durum"); d.textContent = m; d.hidden = false;
+  clearTimeout(durumYaz.t); if (sure) durumYaz.t = setTimeout(() => d.hidden = true, sure);
+}
+// ---- yazı boyutu
+let boy = Number(oku("oku-boy", 19));
+const boyUygula = () => { document.documentElement.style.setProperty("--boy", boy + "px"); sakla("oku-boy", boy); };
+$("#kucult").onclick = () => { boy = Math.max(14, boy - 1); boyUygula(); };
+$("#buyut").onclick = () => { boy = Math.min(30, boy + 1); boyUygula(); };
+boyUygula();
+
+// ---- dil seçimi
+function dilDugmeleri() {
+  const d = kitap.diller.filter(x => x !== "ar" || kitap.kunye.asil_dil === "ar");
+  const secenek = d.map(x => [x]);
+  if (d.includes("tr") && d.includes("osm")) secenek.push(["tr", "osm"]);
+  if (kitap.kunye.asil_dil && kitap.kunye.asil_dil !== "tr" && d.includes(kitap.kunye.asil_dil) && d.includes("tr")) secenek.push([kitap.kunye.asil_dil, "tr"]);
+  const kayitli = oku("oku-dil-" + kid, "");
+  gosterilen = secenek.find(s => s.join("+") === kayitli) || secenek[0];
+  const kutu = $("#diller"); kutu.replaceChildren();
+  if (secenek.length < 2) { kutu.hidden = true; return; }
+  for (const s of secenek) {
+    kutu.append(E("button", { type: "button", "aria-pressed": s.join("+") === gosterilen.join("+"),
+      onclick: () => { gosterilen = s; sakla("oku-dil-" + kid, s.join("+")); dilDugmeleri(); ciz(); } },
+      s.length > 1 ? "İkisi" : ADLAR[s[0]] || s[0]));
+  }
+}
+
+// ---- metin + dipnot düğmeleri
+function satirIci(metin) {
+  const out = []; let son = 0;
+  for (const m of (metin || "").matchAll(/\{\{(n\d{4,})\}\}/g)) {
+    out.push(metin.slice(son, m.index));
+    const g = m[1];
+    out.push(E("button", { class: "not", type: "button", "aria-label": "Dipnot " + (bolum.not_no[g] || ""),
+      onclick: ev => { ev.stopPropagation(); notGoster(g); } }, String(bolum.not_no[g] || "*")));
+    son = m.index + m[0].length;
+  }
+  out.push(metin.slice(son));
+  return out;
+}
+function notGoster(g) {
+  const k = $("#notkutu"), n = bolum.dipnotlar[g] || {};
+  k.replaceChildren(...gosterilen.filter(d => n[d]).map(d => E("p", { lang: LANG[d], dir: YON[d] }, `${bolum.not_no[g] || ""}. `, n[d])));
+  k.hidden = false;
+}
+document.addEventListener("click", ev => { if (!ev.target.closest("#notkutu") && !ev.target.closest("button.not")) $("#notkutu").hidden = true; });
+
+// ---- bölüm çizimi
+function blokCiz(b) {
+  const kutu = E("div", { class: "blok" + (b.silindi ? " silindi" : ""), id: b.id, "data-id": b.id });
+  if (b.silindi && !duzeltKipi) kutu.hidden = true;
+  gosterilen.forEach((d, i) => {
+    const t = b.metin[d]; if (!t) return;
+    const at = { lang: LANG[d], dir: YON[d], class: i ? "ikinci" : "" };
+    const el = b.tur === "baslik" ? E("h" + Math.min((b.seviye || 1) + 1, 4), at, satirIci(t)) : E("p", at, satirIci(t));
+    kutu.append(el);
+  });
+  if (duzeltKipi && Object.keys(b.elle || {}).length) kutu.lastChild?.append(E("span", { class: "isaret" }, "düzeltildi"));
+  kutu.onclick = ev => { if (duzeltKipi && !ev.target.closest(".editor")) editorAc(b, kutu); };
+  return kutu;
+}
+function ciz() {
+  if (!bolum) return;
+  acikEditor = null;
+  document.body.classList.toggle("duzelt-kipi", duzeltKipi);
+  $("#bolumAd").textContent = bolum.etiket;
+  const m = $("#metin"); m.replaceChildren(...bolum.bloklar.map(blokCiz));
+  $("#onceki").disabled = bolumNo <= 0; $("#sonraki").disabled = bolumNo >= bolum.toplam - 1;
+  for (const b of document.querySelectorAll("#fihrist li button")) b.setAttribute("aria-current", String(Number(b.dataset.no) === bolumNo));
+}
+async function bolumAc(no, hedef = null) {
+  try { bolum = await api(`/api/kitaplar/${encodeURIComponent(kid)}/bolum/${no}`); } catch (e) { durumYaz(e.message, 0); return; }
+  bolumNo = no; ciz();
+  if (hedef && document.getElementById(hedef)) document.getElementById(hedef).scrollIntoView();
+  else window.scrollTo(0, 0);
+  konumKaydet();
+}
+$("#onceki").onclick = () => bolumAc(bolumNo - 1);
+$("#sonraki").onclick = () => bolumAc(bolumNo + 1);
+
+// ---- fihrist çekmecesi
+function fihristCiz() {
+  const ol = $("#fihrist"); ol.replaceChildren();
+  kitap.bolumler.forEach(b => {
+    ol.append(E("li", {}, E("button", { type: "button", "data-no": b.no, onclick: () => { cekmece(false); bolumAc(b.no); } }, b.etiket)));
+    for (const a of b.alt) ol.append(E("li", { class: "alt" }, E("button", { type: "button", "data-no": b.no,
+      onclick: () => { cekmece(false); bolumAc(b.no, a.id); } }, a.metin)));
+  });
+}
+const cekmece = acik => { $("#cekmece").hidden = !acik; if (acik) $("#fihrist [aria-current='true']")?.focus(); };
+$("#fihristBtn").onclick = () => cekmece(true);
+$("#perde").onclick = () => cekmece(false);
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") { cekmece(false); $("#notkutu").hidden = true; } });
+
+// ---- düzeltme kipi ve editör
+$("#duzeltBtn").onclick = () => { duzeltKipi = !duzeltKipi; $("#duzeltBtn").setAttribute("aria-pressed", duzeltKipi); ciz();
+  if (duzeltKipi) durumYaz("Düzeltmek istediğin paragrafa dokun", 3500); };
+function editorAc(b, kutu) {
+  if (acikEditor) acikEditor.remove();
+  const alanlar = {}, hata = E("p", { class: "hata", "aria-live": "polite" });
+  const ed = E("div", { class: "editor", role: "group", "aria-label": "Paragrafı düzelt" });
+  for (const d of gosterilen.filter(d => b.metin[d] != null)) {
+    const ta = E("textarea", { lang: LANG[d], dir: YON[d] }); ta.value = b.metin[d]; alanlar[d] = ta;
+    ed.append(E("label", {}, ADLAR[d] + (b.elle?.[d] ? " (elle düzeltilmiş)" : ""), ta));
+  }
+  const tur = E("select", { "aria-label": "Tür" },
+    E("option", { value: "p" }, "Paragraf"), E("option", { value: "baslik:1" }, "Başlık (bölüm)"),
+    E("option", { value: "baslik:2" }, "Alt başlık"), E("option", { value: "baslik:3" }, "Alt alt başlık"));
+  tur.value = b.tur === "baslik" ? `baslik:${b.seviye || 1}` : "p";
+  const kaydet = E("button", { class: "btn", type: "button" }, "Kaydet");
+  const vazgec = E("button", { class: "btn hafif", type: "button", onclick: () => { ed.remove(); acikEditor = null; } }, "Vazgeç");
+  const geri = b.gecmis ? E("button", { class: "btn hafif", type: "button" }, "Geri al") : null;
+  const sil = E("button", { class: "btn kirmizi", type: "button" }, b.silindi ? "Geri getir" : "Sil");
+  ed.append(E("div", { class: "satir" }, tur, kaydet, vazgec, geri, sil), hata,
+    E("p", { class: "bilgi" }, "{{n0001}} gibi işaretler dipnottur, dokunma. Türkçeyi düzeltince Osmanlıcası kendiliğinden yenilenir. Ctrl/⌘+Enter kaydeder."));
+  const uygula = async (istek, yol = "") => {
+    kaydet.disabled = true; hata.textContent = "";
+    try {
+      const v = await api(`/api/kitaplar/${encodeURIComponent(kid)}/blok/${b.id}${yol}`, istek);
+      const i = bolum.bloklar.findIndex(x => x.id === b.id); bolum.bloklar[i] = v.blok;
+      const yeni = blokCiz(v.blok); kutu.replaceWith(yeni); acikEditor = null;
+      durumYaz((v.uyari || []).join(" ") || "Kaydedildi. EPUB'lar arka planda güncelleniyor.", v.uyari?.length ? 6000 : 2500);
+      if (istek.body && JSON.parse(istek.body).tur) kitapBilgi(false);
+    } catch (e) { hata.textContent = e.message; kaydet.disabled = false; }
+  };
+  kaydet.onclick = async () => {
+    const [t, sv] = tur.value.split(":");
+    const degisenler = Object.entries(alanlar).filter(([d, ta]) => ta.value.trim() !== b.metin[d]);
+    if (!degisenler.length && t === b.tur && (Number(sv || 0) || null) === (b.tur === "baslik" ? (b.seviye || 1) : null)) { vazgec.onclick(); return; }
+    if (t !== b.tur || (t === "baslik" && Number(sv) !== (b.seviye || 1))) {
+      await uygula({ method: "PATCH", body: JSON.stringify({ tur: t, seviye: sv ? Number(sv) : null }) }); if (!degisenler.length) return;
+      b = bolum.bloklar.find(x => x.id === b.id); kutu = document.getElementById(b.id);
+    }
+    // Türkçe önce (Osmanlıcası sunucuda yenilenir), sonra elle yazılan Osmanlıca
+    degisenler.sort(([a], [c]) => (a === "tr" ? -1 : c === "tr" ? 1 : 0));
+    for (const [d, ta] of degisenler) await uygula({ method: "PATCH", body: JSON.stringify({ dil: d, metin: ta.value }) });
+  };
+  if (geri) geri.onclick = () => uygula({ method: "POST" }, "/geri");
+  sil.onclick = () => uygula({ method: "PATCH", body: JSON.stringify({ silindi: !b.silindi }) });
+  ed.addEventListener("keydown", ev => {
+    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); kaydet.onclick(); }
+    if (ev.key === "Escape") { ev.stopPropagation(); vazgec.onclick(); }
+  });
+  kutu.after(ed); acikEditor = ed; (Object.values(alanlar)[0] || kaydet).focus();
+}
+
+// ---- kaldığın yer (sunucuda: başka cihazdan devam)
+let konumZaman = null;
+function gorunenBlok() {
+  for (const el of document.querySelectorAll("#metin .blok")) { if (!el.hidden && el.getBoundingClientRect().bottom > 80) return el.dataset.id; }
+  return null;
+}
+function konumKaydet() {
+  clearTimeout(konumZaman);
+  konumZaman = setTimeout(() => api(`/api/kitaplar/${encodeURIComponent(kid)}/konum`, { method: "PUT",
+    body: JSON.stringify({ bolum: bolumNo, blok: gorunenBlok() }) }).catch(() => {}), 1500);
+}
+addEventListener("scroll", konumKaydet, { passive: true });
+
+async function kitapBilgi(ilk = true) {
+  try { kitap = await api(`/api/kitaplar/${encodeURIComponent(kid)}/oku`); } catch (e) { $("#ad").textContent = e.message; return; }
+  const ku = kitap.kunye; const ad = ku.baslik.tr || Object.values(ku.baslik).find(x => typeof x === "string") || kid;
+  $("#ad").textContent = ad; document.title = ad + " · Oku";
+  fihristCiz();
+  if (ilk) { dilDugmeleri(); const k = kitap.konum || {}; await bolumAc(Math.min(k.bolum || 0, kitap.bolumler.length - 1), k.blok); }
+}
+kitapBilgi();
+</script>
+</body>
+</html>

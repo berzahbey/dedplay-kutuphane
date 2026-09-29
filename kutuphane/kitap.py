@@ -68,6 +68,98 @@ def duzelt(kitap, blok_id, dil, yeni_metin):
     raise KeyError(blok_id)
 
 
+def blok_bul(kitap, blok_id):
+    for b in kitap["bloklar"]:
+        if b["id"] == blok_id:
+            return b
+    raise KeyError(blok_id)
+
+
+def tur_degistir(kitap, blok_id, tur, seviye=None):
+    """Paragraf <-> başlık (fihrist onarımı). Eski hâl geçmişe yazılır."""
+    if tur not in ("p", "baslik"):
+        raise ValueError("tür 'p' ya da 'baslik' olmalı")
+    b = blok_bul(kitap, blok_id)
+    seviye = min(max(int(seviye or 1), 1), 3) if tur == "baslik" else None
+    if b["tur"] == tur and b.get("seviye") == seviye:
+        return False
+    b.setdefault("gecmis", []).append({"tur": b["tur"], "seviye": b.get("seviye"), "zaman": int(time.time())})
+    b["tur"] = tur
+    if seviye:
+        b["seviye"] = seviye
+    else:
+        b.pop("seviye", None)
+    return True
+
+
+def sil(kitap, blok_id, silindi=True):
+    """Blok silinmiş işaretlenir (kitaptan kalkmaz; geri alınabilir). EPUB'da görünmez."""
+    b = blok_bul(kitap, blok_id)
+    if bool(b.get("silindi")) == silindi:
+        return False
+    b.setdefault("gecmis", []).append({"silindi": bool(b.get("silindi")), "zaman": int(time.time())})
+    if silindi:
+        b["silindi"] = True
+    else:
+        b.pop("silindi", None)
+    return True
+
+
+def geri_al(kitap, blok_id):
+    """Bloğun son değişikliğini geri alır (metin, tür ya da silme). Geri alınacak bir şey yoksa False."""
+    b = blok_bul(kitap, blok_id)
+    if not b.get("gecmis"):
+        return False
+    g = b["gecmis"].pop()
+    if "dil" in g:
+        b["metin"][g["dil"]] = g["eski"]
+        if "osm_eski" in g:  # Türkçe düzeltmeyle otomatik yenilenen Osmanlıca da geri döner
+            b["metin"]["osm"] = g["osm_eski"]
+        if not any(x.get("dil") == g["dil"] for x in b["gecmis"]):
+            b.get("elle", {}).pop(g["dil"], None)  # o dilde başka elle düzeltme kalmadı
+    elif "tur" in g:
+        b["tur"] = g["tur"]
+        if g.get("seviye"):
+            b["seviye"] = g["seviye"]
+        else:
+            b.pop("seviye", None)
+    elif "silindi" in g:
+        if g["silindi"]:
+            b["silindi"] = True
+        else:
+            b.pop("silindi", None)
+    if not b["gecmis"]:
+        del b["gecmis"]
+    if not b.get("elle"):
+        b.pop("elle", None)
+    return True
+
+
+def gorunur(kitap):
+    """EPUB ve okuma için görünür kopya: silinen bloklar çıkar, sayfa işaretleri sonraki bloğa geçer,
+    görünür metinde atfı kalmayan dipnotlar düşer."""
+    import copy
+    k = copy.deepcopy(kitap)
+    bloklar, tasinan = [], []
+    for b in k["bloklar"]:
+        if b.get("silindi"):
+            tasinan += [{"no": s["no"], "konum": {d: 0 for d in (s.get("konum") or {"tr": 0})}} for s in b.get("sayfalar", [])]
+            continue
+        if tasinan:
+            b["sayfalar"] = tasinan + b.get("sayfalar", [])
+            tasinan = []
+        bloklar.append(b)
+    if tasinan and bloklar:
+        bloklar[-1].setdefault("sayfalar", []).extend(tasinan)
+    k["bloklar"] = bloklar
+    atif = set()
+    for b in bloklar:
+        for t in b["metin"].values():
+            atif |= set(NOT_ISARETI.findall(t or ""))
+    k["dipnotlar"] = {g: n for g, n in k.get("dipnotlar", {}).items() if g in atif}
+    return k
+
+
 def kaydet(kitap, yol):
     """Önce geçici dosyaya yazılır, sonra yerine konur: yarıda kesilirse eski dosya bozulmaz."""
     klasor = os.path.dirname(os.path.abspath(yol))

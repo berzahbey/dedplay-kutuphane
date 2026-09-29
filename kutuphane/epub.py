@@ -191,6 +191,25 @@ class _Uretici:
                 out.append(g)
         return out
 
+    def yapi(self):
+        """Okuma ekranı için bölüm yapısı (EPUB'daki bölümlerin aynısı): [{etiket, bloklar, alt}]."""
+        out = []
+        for grup in self.bolumler():
+            ilk, acan = grup[0], None
+            baslik = None
+            if ilk["tur"] == "baslik":
+                baslik = K.NOT_ISARETI.sub("", ilk["metin"].get(self.ana) or next((v for v in ilk["metin"].values() if v), "")).strip()
+            if self.numarali:
+                etiket, acan = self._bolum_etiketi(grup, baslik), (ilk["id"] if baslik else None)
+            else:
+                etiket = baslik or self.baslik
+                acan = ilk["id"] if baslik else None
+            alt = [{"id": b["id"], "seviye": b.get("seviye", 1),
+                    "metin": K.NOT_ISARETI.sub("", b["metin"].get(self.ana) or next((v for v in b["metin"].values() if v), "")).strip()}
+                   for b in grup if b["tur"] == "baslik" and b["id"] != acan]
+            out.append({"etiket": etiket, "bloklar": [b["id"] for b in grup], "alt": alt})
+        return out
+
     def _sayfa_haritasi(self):
         """Her bloğun başında geçerli olan basılı sayfa."""
         harita, gecerli = {}, None
@@ -338,8 +357,30 @@ class _Uretici:
         return {"ar": "الفهرس", "osm": "فهرست"}.get(self.ana, "Fihrist")
 
 
+def bolum_yapisi(kit, dil):
+    """Okuma ekranının bölümleri. Silinmiş bloklar, ardından gelen görünür bloğun bölümüne konur (geri getirilebilsin)."""
+    gor = K.gorunur(kit)
+    yapi = _Uretici(gor, [dil]).yapi()
+    bolum_of = {bid: i for i, b in enumerate(yapi) for bid in b["bloklar"]}
+    bekleyen = []
+    for b in kit["bloklar"]:
+        if b.get("silindi"):
+            bekleyen.append(b["id"])
+        elif bekleyen:
+            yapi[bolum_of[b["id"]]]["bloklar"][0:0] = bekleyen  # bölümün başına
+            bekleyen = []
+    if bekleyen and yapi:
+        yapi[-1]["bloklar"] += bekleyen
+    # bölüm içi sıra kitaptaki sıraya göre
+    sira = {b["id"]: i for i, b in enumerate(kit["bloklar"])}
+    for b in yapi:
+        b["bloklar"].sort(key=sira.get)
+    return yapi
+
+
 def uret(kit, diller, cikti_yolu=None, baslik=None, kapak_png=None):
     """EPUB baytlarını döndürür (cikti_yolu verilirse oraya da yazar)."""
+    kit = K.gorunur(kit)  # silinen bloklar EPUB'a girmez
     u = _Uretici(kit, diller, baslik)
     kimlik = kit["kunye"].get("kaynak", {}).get("kimlik") or u.baslik
     uid = "urn:uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, "dedplay-kutuphane/" + kimlik + "/" + "-".join(diller)))

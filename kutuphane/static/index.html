@@ -41,6 +41,9 @@ button.btn { font: 600 .95rem var(--sans); border-radius: 8px; padding: 9px 16px
 button.btn.ghost { background: transparent; color: var(--tile); }
 button.btn.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
 button.btn:disabled { opacity: .5; cursor: default; }
+a.btn { font: 600 .95rem var(--sans); border-radius: 8px; padding: 9px 16px; text-decoration: none; display: inline-block;
+  border: 1px solid var(--tile); background: var(--tile); color: var(--surface); }
+.sag { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 button:focus-visible, input:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid var(--lapis); outline-offset: 2px; }
 input[type=search], input[type=text] { font: 1rem var(--sans); padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface); color: var(--ink); width: 100%; }
@@ -262,8 +265,10 @@ async function kitaplar() {
         k.baslik && k.baslik_asil && k.baslik !== k.baslik_asil ? E("div", { class: "lat" }, k.baslik) : null,
         E("div", { class: "meta" }, E("span", {}, k.yazar || ""), asamaYazisi(k)),
         k.uyari ? E("div", { class: "uyari" }, k.uyari) : null),
-      E("button", { class: "btn ghost", type: "button", "aria-expanded": k.kimlik === acik,
-        onclick: () => { acik = acik === k.kimlik ? null : k.kimlik; kitaplar(); } }, k.kimlik === acik ? "Kapat" : "Aç"));
+      E("div", { class: "sag" },
+        (k.epublar || []).length ? E("a", { class: "btn", href: "/oku/" + encodeURIComponent(k.kimlik) }, "Oku") : null,
+        E("button", { class: "btn ghost", type: "button", "aria-expanded": k.kimlik === acik,
+          onclick: () => { acik = acik === k.kimlik ? null : k.kimlik; kitaplar(); } }, k.kimlik === acik ? "Kapat" : "Aç")));
     ul.append(li);
     if (k.kimlik === acik) ayrinti(k.kimlik, li);
   }
@@ -320,7 +325,8 @@ async function ayrinti(kid, li) {
     if (!confirm("Bu kitap, kitap.json dosyası ve bütün EPUB'larıyla birlikte silinecek. Emin misin?")) return;
     try { await api("/api/kitaplar/" + encodeURIComponent(kid), { method: "DELETE" }); acik = null; kitaplar(); } catch (e) { alert(e.message); }
   };
-  kutu.append(E("div", { class: "alt" }, yeniden, osm, sil));
+  const okuBag = d.kunye ? E("a", { class: "btn", href: "/oku/" + encodeURIComponent(kid) }, "Oku ve düzelt") : null;
+  kutu.append(E("div", { class: "alt" }, okuBag, yeniden, osm, sil));
 }
 servisler(); kitaplar(); setInterval(servisler, 60000);
 </script>
