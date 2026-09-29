@@ -201,7 +201,8 @@ $("#araform").onsubmit = async ev => {
           E("div", { class: "ar", lang: "ar", dir: "rtl" }, ilkAd(r.title_ar)),
           E("div", { class: "lat" }, [r.author_lat_shuhra, r.title_lat || r.book].filter(Boolean).join(", ")),
           E("div", { class: "meta" }, E("span", { lang: "ar", dir: "rtl" }, ilkAd(r.author_ar)),
-            E("span", {}, `v. ${Number(r.date)} h.`), E("span", {}, kelime(Number(r.tok_length))))),
+            E("span", {}, `v. ${Number(r.date)} h.`), E("span", {}, kelime(Number(r.tok_length))),
+            r.ocr ? E("span", { class: "uyari", title: "OpenITI'de henüz düzeltilmemiş OCR metni: okuma hataları olabilir. Varsa aynı eserin başka bir sürümünü tercih et." }, "düzeltilmemiş OCR") : null)),
         btn));
     }
   } catch (e) { ul.replaceChildren(E("li", { class: "bos" }, e.message)); }
@@ -246,7 +247,10 @@ $("#yukleBtn").onclick = async () => {
 
 // ---- kitaplarım
 const arapHarfli = s => /[\u0600-\u06FF]/.test(s || "");
+const sureYaz = sn => { const sa = Math.floor(sn / 3600), dk = Math.round((sn % 3600) / 60); return sa ? `${sa} sa ${dk} dk` : `${Math.max(1, dk)} dk`; };
 function asamaYazisi(k) {
+  if (k.ceviri?.durum === "calisiyor") return E("span", { class: "asama" }, `Türkçeye çevriliyor: %${Math.floor(100 * (k.ceviri.yapilan || 0) / (k.ceviri.toplam || 1))}` +
+    (k.ceviri.kalan_sn ? `, kalan ~${sureYaz(k.ceviri.kalan_sn)}` : ""));
   if (k.asama === "hazır") return E("span", { class: "asama hazir" }, `Hazır, ${(k.epublar || []).length} EPUB`);
   if (k.asama === "hata") return E("span", { class: "asama hata" }, "Hata: " + (k.hata || ""));
   return E("span", { class: "asama" }, k.asama || "…");
@@ -274,12 +278,14 @@ async function kitaplar() {
     if (k.kimlik === acik) ayrinti(k.kimlik, li);
   }
   const suruyor = liste.some(k => !["hazır", "hata"].includes(k.asama));
-  clearTimeout(yoklama); if (suruyor) yoklama = setTimeout(kitaplar, 3000);
+  const ceviriSuruyor = liste.some(k => k.ceviri?.durum === "calisiyor");
+  clearTimeout(yoklama); if (suruyor || ceviriSuruyor) yoklama = setTimeout(kitaplar, suruyor ? 3000 : 30000);
 }
 async function ayrinti(kid, li) {
   const kutu = E("div", { class: "ayrinti" }, "Yükleniyor…"); li.append(kutu);
   let d; try { d = await api("/api/kitaplar/" + encodeURIComponent(kid)); } catch (e) { kutu.textContent = e.message; return; }
   kutu.replaceChildren();
+  if (d.kunye?.ocr) kutu.append(E("p", { class: "uyari" }, "Bu metin OpenITI'de henüz düzeltilmemiş OCR: resim bağlantıları, varak işaretleri ve naşir dipnot numaraları temizlendi, ama harf hataları kalmış olabilir. Okuma ekranında düzeltebilirsin."));
   if (d.kunye) {
     const ku = d.kunye, st = d.istatistik;
     const bas = E("input", { type: "text", value: ku.baslik.tr || "", placeholder: "ör. el-İktisâd fi'l-İ'tikâd" });
@@ -312,7 +318,47 @@ async function ayrinti(kid, li) {
   if (d.durum.cikti?.length) epKutu.append(E("p", { class: "meta" }, E("span", {}, "Kitaplar klasöründe: " + d.durum.cikti.join(", "))));
   else if (d.durum.cikti_uyari) epKutu.append(E("p", { class: "uyari" }, d.durum.cikti_uyari));
   kutu.append(epKutu);
-  if (ep.length) {
+  if (d.ceviri_eksik || d.durum.ceviri) {
+    const c = d.durum.ceviri || {}, eksik = d.ceviri_eksik || { paragraf: 0 };
+    const cb = E("div", {}, E("h3", {}, "Türkçe çeviri"));
+    const cevirBtn = (sonraStudyo, yazi) => {
+      const b = E("button", { class: "btn" + (sonraStudyo ? "" : " ghost"), type: "button" }, yazi);
+      b.onclick = async () => {
+        if (!d.kunye.baslik.tr && !confirm("Türkçe eser adı boş: dosya adları ve Stüdyo'daki klasör Arapça adla açılacak. " +
+            "Önce yukarıdaki künyeye Türkçe adı (ör. el-Munkız mine'd-Dalâl) yazıp kaydetmen önerilir.\n\nYine de devam edilsin mi?")) return;
+        if (!confirm(`${eksik.paragraf} paragraf ${eksik.model} ile Türkçeye çevrilecek. Tahmini süre: ~${sureYaz(eksik.tahmini_sn)}.` +
+            "\n\nBitince Türkçe, Osmanlıca ve Türkçe-Osmanlıca EPUB'lar oluşur; okuyup düzelttikten sonra Stüdyo'ya gönderebilirsin. Başlasın mı?")) return;
+        b.disabled = true;
+        try { await api(`/api/kitaplar/${encodeURIComponent(kid)}/cevir`, { method: "POST", body: JSON.stringify({ sonra_studyo: sonraStudyo }) }); kitaplar(); }
+        catch (e) { alert(e.message); b.disabled = false; }
+      };
+      return b;
+    };
+    if (c.durum === "calisiyor") {
+      const yuzde = Math.floor(100 * (c.yapilan || 0) / (c.toplam || 1));
+      const dur = E("button", { class: "btn danger", type: "button" }, "Çeviriyi durdur");
+      dur.onclick = async () => { if (!confirm("Çeviri durdurulsun mu? (Yapılan kısım Translate'te silinir; sonra baştan başlatılır.)")) return;
+        await api(`/api/kitaplar/${encodeURIComponent(kid)}/cevir`, { method: "DELETE" }).catch(e => alert(e.message)); kitaplar(); };
+      cb.append(E("p", { class: "meta" }, E("span", {}, `${c.model} ile çevriliyor: ${c.yapilan || 0}/${c.toplam} paragraf (%${yuzde})`),
+        E("span", {}, c.kalan_sn ? `kalan ~${sureYaz(c.kalan_sn)}` : `tahmini toplam ~${sureYaz(c.tahmini_sn || 0)}`),
+        c.sonra_studyo ? E("span", {}, "bitince Stüdyo'ya gidecek") : null), E("div", { class: "alt" }, dur));
+    } else {
+      if (c.durum === "bitti") cb.append(E("p", { class: "meta" }, `Çevrildi (${c.model}, ${c.yazilan ?? c.toplam} paragraf)` +
+        (c.cevrilemeyen ? `; ${c.cevrilemeyen} paragraf çevrilemedi, okuma ekranında "[Çevrilemedi]" diye görünür` : "")));
+      if (c.durum === "hata") cb.append(E("p", { class: "uyari" }, "Çeviri durdu: " + (c.hata || "")));
+      if (c.durum === "durduruldu") cb.append(E("p", { class: "meta" }, "Çeviri durduruldu."));
+      if (eksik.paragraf) {
+        cb.append(E("p", { class: "meta" }, `${eksik.paragraf} paragrafın Türkçesi yok · tahmini ~${sureYaz(eksik.tahmini_sn)} (${eksik.model})`));
+        cb.append(E("div", { class: "alt" }, cevirBtn(false, "Türkçeye çevir")));
+      }
+    }
+    kutu.append(cb);
+  }
+  if (ep.length && !d.diller?.includes("tr")) {
+    kutu.append(E("div", {}, E("h3", {}, "Seslendirme ve öteki biçimler"),
+      E("p", { class: "meta" }, "Stüdyo'ya Türkçe metin gider. Çeviri bitince okuyup düzelt, sonra buradan Stüdyo'ya gönder.")));
+  }
+  if (ep.length && d.diller?.includes("tr")) {
     const st = d.durum.studyo;
     const gonder = E("button", { class: "btn" + (st ? " ghost" : ""), type: "button" }, st ? "Stüdyo'ya yeniden gönder" : "Stüdyo'ya gönder");
     const bilgi = E("p", { class: "meta", "aria-live": "polite" });
@@ -327,7 +373,7 @@ async function ayrinti(kid, li) {
       gonder.disabled = false;
     };
     kutu.append(E("div", {}, E("h3", {}, "Seslendirme ve öteki biçimler"),
-      E("p", { class: "meta" }, "Kitap, düzeltmelerinle birlikte Stüdyo'ya gider; ses ve biçimler Stüdyo'nun çıktı klasörüne kaydedilir."),
+      E("p", { class: "meta" }, "Kitabın Türkçesi, düzeltmelerinle birlikte Stüdyo'ya gider. Stüdyo seslendirir, Osmanlıcaya çevirir; ses ve biçimler Stüdyo'nun çıktı klasörüne kaydedilir."),
       E("div", { class: "alt" }, gonder), bilgi));
   }
   if (d.fihrist?.length) {

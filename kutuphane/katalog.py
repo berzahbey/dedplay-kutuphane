@@ -106,7 +106,10 @@ def ara(veri_klasoru, sorgu, azami=50):
             uzun = 0
         return (-tam, -min(uzun, 2_000_000))
     bul.sort(key=puan)
-    return [{k: v for k, v in s.items() if not k.startswith("_")} for s in bul[:azami]]
+    out = [{k: v for k, v in s.items() if not k.startswith("_")} for s in bul[:azami]]
+    for s in out:  # düzeltilmemiş OCR (AOCP): metinde okuma hataları olabilir
+        s["ocr"] = "AOCP" in s["versionUri"] or "OCR" in (s.get("tags") or "").upper()
+    return out
 
 
 def bul(veri_klasoru, version_uri):

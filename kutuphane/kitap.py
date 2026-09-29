@@ -46,7 +46,7 @@ def blok_ekle(kitap, tur, metin, **kw):
 def diller(kitap):
     """Kitapta metni bulunan diller (blokların çoğunda dolu olanlar)."""
     say = {}
-    ps = [b for b in kitap["bloklar"] if b["tur"] == "p"]
+    ps = [b for b in kitap["bloklar"] if b["tur"] == "p" and not b.get("silindi")]  # silinen satırlar sayılmaz
     for b in ps:
         for d, t in b["metin"].items():
             if t and t.strip():

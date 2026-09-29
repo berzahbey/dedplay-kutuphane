@@ -26,13 +26,25 @@ K.sil(kit, "b00003")
 
 p = cikti.studyo_parcalari(kit)
 ok([x["name"] for x in p][-1] == "Dipnot_001" and all(x["name"].startswith("Parca_") for x in p[:-1]), "Parçalar: bölümler Parca_, dipnotlar Dipnot_")
-ok(all(len(x["tr"].split("\n")) == len(x["osm"].split("\n")) for x in p), "Türkçe ve Osmanlıca satır sayıları eşit (iki dilli hiza)")
+ok(all("osm" not in x for x in p), "Stüdyo'ya sadece Türkçe gider (Osmanlıcaya Stüdyo çevirir)")
 ok(p[0]["tr"].split("\n")[0] == "GİRİŞ" and "Bölüm 001" not in p[0]["tr"], "Bölüm, başlığıyla başlar (etiket seslendirmede okunmaz)")
-ok("{{" not in "".join(x["tr"] + x["osm"] for x in p), "Dipnot işaretleri gitmez")
+ok("{{" not in "".join(x["tr"] for x in p), "Dipnot işaretleri gitmez")
 ok("Çöp satır" not in "".join(x["tr"] for x in p), "Silinen satır gitmez")
-ok("Osmanlıcası olmayan satır." in p[0]["osm"], "Osmanlıcası olmayan satır hiza için Türkçesiyle doldurulur")
-ok(p[-1]["tr"].split("\n") == ["DİPNOTLAR", "1. Dipnot metni."] and p[-1]["osm"].split("\n")[1] == "١. حاشیه", "Dipnotlar numaralı, Osmanlıca rakamla")
+ok("Osmanlıcası olmayan satır." in p[0]["tr"], "Osmanlıcası olmayan satır da gider")
+ok(p[-1]["tr"].split("\n") == ["DİPNOTLAR", "1. Dipnot metni."], "Dipnotlar numaralı")
+ar = K.yeni({"baslik": {"ar": "كتاب"}, "yazar": {"ar": ""}, "asil_dil": "ar", "kaynak": {"tur": "openiti"}})
+K.blok_ekle(ar, "p", {"ar": "نص"})
+try:
+    cikti.studyo_parcalari(ar); ok(False, "Türkçesi olmayan kitap Stüdyo'ya gönderilmez")
+except ValueError:
+    ok(True, "Türkçesi olmayan kitap Stüdyo'ya gönderilmez")
 ok(len(p) >= 3, f"Uzun kitap birden çok bölüm (ses parçası): {len(p) - 1} bölüm")
+uzun = K.yeni({"baslik": {"tr": "Uzun"}, "yazar": {}, "asil_dil": "tr", "kaynak": {"tur": "dosya"}})
+for n in range(60):
+    K.blok_ekle(uzun, "p", {"tr": ("Uzun bir paragraf metni. " * 40).strip()})
+pu = cikti.studyo_parcalari(uzun)
+ok(len(pu) >= 4 and all(len(x["tr"]) <= cikti.PARCA_HARF + 1100 for x in pu), f"Başlıksız uzun kitap ~15.000 harflik ses parçalarına bölünür ({len(pu)} parça)")
+ok(sum(x["tr"].count("\n") + 1 for x in pu) == 60, "Bölerken paragraf kaybolmaz")
 
 # Kitaplar klasörü: dile göre, ad değişince eski dosya kalkar, başka dosyalara dokunulmaz
 kok = tempfile.mkdtemp()

@@ -1,7 +1,7 @@
 """Kütüphane gerileme testleri (internet gerekmez). Çalıştırma: python tests/test_temel.py
 Konteynerde: docker exec dedplay-kutuphane python /app/tests/test_temel.py  (imaja tests kopyalanmaz;
 sunucuda kod klasöründen: docker run --rm -v "$PWD":/k -w /k berzahbey/dedplay-kutuphane:latest python tests/test_temel.py)"""
-import copy, io, os, sys, tempfile, zipfile
+import copy, io, os, re, sys, tempfile, zipfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from kutuphane import epub, epubcheck, katalog, openiti
 from kutuphane import kitap as K
@@ -78,6 +78,22 @@ ok(any("n0099" in e for e in K.denetle(t2)), "boşta dipnot yakalanır")
 # Türkçe arama sadeleştirmesi
 ok(katalog.sade("gazzâlî iktisad").split() == katalog.sade("al-Ġazālī Iqtisad").split(), "gazzâlî iktisad = al-Ġazālī Iqtisad")
 ok("fusus" in katalog.sade("Fusûsu'l-Hikem") and katalog.sade("İbnü'l-Arabî").strip() != "", "şapka ve kesme işareti")
+
+# düzeltilmemiş OCR (AOCP) artıkları: resim bağlantısı, varak, naşir dipnot numaraları (yıllar korunur)
+OCR_ORNEK = """######OpenITI#
+#META#Header#End#
+# | باب
+# الحمد لله فهو(24) لما يرى ![image file](./0638X_0024.png) تعالى [135 و)، والثاني [136ظ] قال (ما يأتيهم محدث)8)، وحديثا)((12) أي
+~~ وتدبير8(220) والله ليلة0(405) هذا مشركون}58)، و الله) 279) وأما المقدسة  (185) من توفي سنة (505) هـ وفي (1111 م) كان.
+# قال(1) وقال(2) وقال(3) وقال(4) وقال(5) تم. PageV01P010
+"""
+k = openiti.cevir(OCR_ORNEK, {"versionUri": "0638Test.Ornek.AOCP1-ara1"})
+tum = " ".join(b["metin"]["ar"] for b in k["bloklar"])
+ok(k["kunye"]["ocr"], "OCR kaynak işaretlenir (AOCP)")
+ok(not re.search(r"image|png|\[\s*\d|\(\d{1,4}\)|\d\)", tum.replace("(505)", "").replace("(1111 م)", "")), f"OCR artıkları temizlenir: {tum[:200]}")
+ok("(505) هـ" in tum and "(1111 م)" in tum, "Yıllar (505 هـ, 1111 م) korunur")
+k2 = openiti.cevir(ORNEK, {})
+ok(k2 == kit or [b["metin"]["ar"] for b in k2["bloklar"]] == [b["metin"]["ar"] for b in kit["bloklar"]], "Temiz metin değişmez")
 
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)

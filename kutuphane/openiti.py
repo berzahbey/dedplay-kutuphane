@@ -16,6 +16,14 @@ MS = re.compile(r"\bms\d+\b")
 BOS_SAYFA = re.compile(r"صفحة فارغة")
 BASLIK = re.compile(r"^#{1,3} (\|+) ?(.*)$")
 ISARET = "\ue000"  # sayfa işareti yer tutucu (özel kullanım alanı karakteri)
+RESIM = re.compile(r"!?\[image[^\]]*\]\([^)]*\)")                  # ![image file](./..._0024.png)
+# yazma varak/sayfa no: [133 و] [133ظ] [136]; OCR bozukları: [135 و) [158ظا [83 اظا]
+VARAK = re.compile(r"\[\s*\d{1,4}\s*[اأ]?\s*[وظ]\s*ا?\s*[\]\)]?|\[\s*\d{1,4}\s*\]")
+YAPISIK_NOT = re.compile(r"(?<=[^\s\d(\[])\(\d{1,4}\)")                # فهو(24): naşir dipnotu numarası (dipnotu dosyada yok)
+BOSLUKLU_NOT = re.compile(r"(?<=\S)\s+\(\d{1,4}\)(?!\s*(?:هـ|ه|م)(?![\u0600-\u06FF]))")  # yıl (505 هـ) korunur
+# OCR bozukları (sadece dipnot düzeni olan kitapta): )((12)  8(220)  0(405)  (3(6)  محدث)8)  أحسنه)29  (170،
+BOZUK_NOT = re.compile(r"\(\(\d{1,4}\)|\d{1,2}\(\d{1,4}\)|\(\d\(\d{1,4}\)|(?<=[\u0600-\u06FF)}])\s?\d{1,4}\)|(?<=[)}])\d{1,4}(?=[\s،.؛:]|$)"
+                       r"|\(\d{2,4}(?=[،.؛\s])(?!\s*(?:هـ|ه|م)(?![\u0600-\u06FF]))")
 
 # Arapça yapı kelimeleri -> derece (küçük = üst seviye). Bilinmeyen başlık bir öncekinin altına girer.
 DERECE = [
@@ -61,6 +69,9 @@ def cevir(metin, kunye_satiri=None):
     meta = _meta(bas)
     ks = kunye_satiri or {}
     ciltler = {int(c) for c, _ in SAYFA.findall(govde)}
+    # düzeltilmemiş OCR metinleri (AOCP): kelimeye yapışık dipnot numaraları varsa naşirin dipnot düzeni vardır;
+    # o zaman boşluklu olanlar da dipnot numarasıdır. Temiz metinlerde bunlar yoktur (sıralamalara dokunulmaz).
+    not_duzeni = len(YAPISIK_NOT.findall(govde)) >= 5
     cok = len(ciltler) > 1
 
     baslik_ar = ks.get("title_ar", "").split("::")[0].strip() or meta.get("BookTITLE", "")
@@ -76,6 +87,7 @@ def cevir(metin, kunye_satiri=None):
                    "baski": baski or ks.get("ed_info", ""),
                    "lisans": "CC BY-NC-SA 4.0 (OpenITI)"},
         "sayfa_kaynagi": baski,
+        "ocr": "AOCP" in ks.get("versionUri", "") or "OCR" in ks.get("tags", "").upper(),
     }
     kit = K.yeni(kunye)
 
@@ -113,6 +125,9 @@ def cevir(metin, kunye_satiri=None):
     yigin = []  # (derece, seviye)
     for tur, ham, cizgi in ogeler:
         ham = MS.sub(" ", BOS_SAYFA.sub(" ", ham)).replace("%~%", "  ")
+        ham = VARAK.sub(" ", RESIM.sub(" ", ham))
+        if not_duzeni:
+            ham = BOZUK_NOT.sub("", BOSLUKLU_NOT.sub("", YAPISIK_NOT.sub("", ham)))
         etiketler = []
         def _yer(m):
             c, s = int(m.group(1)), int(m.group(2))

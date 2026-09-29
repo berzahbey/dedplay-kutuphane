@@ -9,13 +9,13 @@ from pydantic import BaseModel
 
 from fastapi import File, UploadFile
 
-from . import cikti, depo, epub, epubcheck, katalog, kaynak, osmanlica
+from . import ceviri, cikti, depo, epub, epubcheck, katalog, kaynak, osmanlica
 from . import kitap as K
 
 KAYNAK = os.environ.get("KAYNAK_DIR", "/kaynak")
 UZANTILAR = (".pdf", ".epub", ".docx", ".txt")
 
-SURUM = "0.4.0"
+SURUM = "0.5.0"
 STATIK = os.path.join(os.path.dirname(__file__), "static")
 HOST = "http://host.docker.internal"
 SERVISLER = {
@@ -201,6 +201,10 @@ def kitap_ayrinti(kid: str):
         out["diller"] = K.diller(kit)
         out["fihrist"] = [{"id": b["id"], "seviye": b.get("seviye", 1), "metin": b["metin"]}
                           for b in bl if b["tur"] == "baslik"]
+        asil = kit["kunye"].get("asil_dil", "tr")
+        if asil != "tr":
+            _, eksik = ceviri.cevrilecekler(kit, asil)
+            out["ceviri_eksik"] = {"paragraf": len(eksik), "tahmini_sn": ceviri.tahmini_sure(eksik), "model": ceviri.MODEL}
         out["istatistik"] = {"blok": len(bl), "baslik": len(out["fihrist"]),
                              "sayfa": sum(len(b.get("sayfalar", [])) for b in bl),
                              "kelime": sum(len((b["metin"].get(kit["kunye"].get("asil_dil", "ar")) or "").split())
@@ -265,6 +269,8 @@ def studyoya_gonder(kid: str):
     d = depo.durum_oku(kid)
     if d.get("asama") not in ("hazır", "hata") or not d.get("epublar"):
         raise HTTPException(409, "Kitap henüz hazır değil")
+    if "tr" not in K.diller(kit):
+        raise HTTPException(409, "Kitabın Türkçesi yok: önce Türkçeye çevrilmeli ('Türkçeye çevir ve Stüdyo'ya gönder')")
     try:
         sonuc = cikti.studyoya_gonder(kit)
     except requests.RequestException as e:
@@ -273,6 +279,41 @@ def studyoya_gonder(kid: str):
         raise HTTPException(502, str(e))
     depo.durum_yaz(kid, studyo=sonuc)
     return sonuc
+
+
+class CeviriIstegi(BaseModel):
+    sonra_studyo: bool = False
+
+
+@app.post("/api/kitaplar/{kid}/cevir")
+def cevir(kid: str, g: CeviriIstegi):
+    kit = _kitap(kid)
+    c = depo.durum_oku(kid).get("ceviri") or {}
+    if c.get("durum") == "calisiyor":
+        raise HTTPException(409, "Çeviri zaten sürüyor")
+    try:
+        yeni = ceviri.baslat(kit, depo.klasor(kid), g.sonra_studyo)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except requests.RequestException as e:
+        raise HTTPException(503, f"Translate'e ulaşılamadı: {type(e).__name__}")
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+    depo.durum_yaz(kid, ceviri=yeni)
+    return yeni
+
+
+@app.delete("/api/kitaplar/{kid}/cevir")
+def ceviri_durdur(kid: str):
+    c = depo.durum_oku(kid).get("ceviri") or {}
+    if c.get("durum") != "calisiyor":
+        raise HTTPException(409, "Süren bir çeviri yok")
+    try:
+        requests.delete(f"{ceviri.TRANSLATE_URL}/api/jobs/{c['is']}", timeout=30)
+    except requests.RequestException:
+        pass
+    depo.durum_yaz(kid, ceviri=dict(c, durum="durduruldu"))
+    return {"ok": True}
 
 
 # ---------------- Okuma ve düzeltme ----------------

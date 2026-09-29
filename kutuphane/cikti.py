@@ -2,8 +2,8 @@
 
 1) Çıktı klasörü (CIKTI_DIR, varsayılan /cikti = /media/ZimaOS-HD/Media/Kitaplar): EPUB'lar dile göre klasörlerde
    Türkçe/, Osmanlıca/, Türkçe-Osmanlıca/, Arapça/, Arapça-Türkçe/  ->  "Eser adı - Yazar.epub"
-2) Stüdyo'ya gönderme: bölümler Türkçe + (düzeltilmiş) Osmanlıca hazır parçalar olarak gider; Stüdyo seslendirir ve
-   öteki biçimleri (PDF, Word, HTML, TXT) kendi çıktı klasörüne, kendi düzeniyle kaydeder.
+2) Stüdyo'ya gönderme: bölümlerin sadece Türkçesi (düzeltilmiş hâliyle) parçalar olarak gider; Stüdyo seslendirir,
+   Osmanlıcaya kendisi çevirir ve öteki biçimleri kendi çıktı klasörüne, kendi düzeniyle kaydeder.
 """
 import os
 import re
@@ -21,6 +21,7 @@ KLASOR_ADI = {("tr",): "Türkçe", ("osm",): "Osmanlıca", ("tr", "osm"): "Türk
               ("ar", "tr"): "Arapça-Türkçe", ("en",): "İngilizce", ("en", "tr"): "İngilizce-Türkçe",
               ("fr",): "Fransızca", ("fr", "tr"): "Fransızca-Türkçe"}
 _YASAK = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+PARCA_HARF = 15000  # Stüdyo'ya giden bir parçanın (bir ses dosyasının) en fazla uzunluğu
 
 
 def dosya_adi(kit):
@@ -66,21 +67,27 @@ def studyo_parcalari(kit):
     Türkçe ve Osmanlıca satırlar birebir eşleşir (iki dilli çıktılar hizalı olsun). Dipnot işaretleri ve sayfa
     numaraları gitmez; bölüm, başlığıyla başlar ('Bölüm 001 (5-20)' etiketi seslendirmede okunmasın)."""
     gor = K.gorunur(kit)
-    ana_dil = "tr" if "tr" in K.diller(gor) else gor["kunye"].get("asil_dil", "tr")
+    if "tr" not in K.diller(gor):
+        raise ValueError("Kitabın Türkçesi yok: önce Türkçeye çevrilmeli")
+    ana_dil = "tr"  # Stüdyo'ya sadece Türkçe gider; Osmanlıcaya Stüdyo kendisi çevirir
     yapi = EPUB._Uretici(gor, [ana_dil]).yapi()
     bloklar = {b["id"]: b for b in gor["bloklar"]}
-    parcalar = []
-    for i, bolum in enumerate(yapi, 1):
-        tr, osm = [], []
+    parcalar, satirlar = [], []
+    for bolum in yapi:  # uzun bölüm, paragraf sınırından ~15.000 harflik parçalara (her parça bir ses dosyası)
+        tr, uz = [], 0
         for bid in bolum["bloklar"]:
-            b = bloklar[bid]
-            t = _temiz(b["metin"].get(ana_dil))
+            t = _temiz(bloklar[bid]["metin"].get(ana_dil))
             if not t:
                 continue
+            if tr and uz + len(t) > PARCA_HARF:
+                satirlar.append(tr)
+                tr, uz = [], 0
             tr.append(t)
-            osm.append(_temiz(b["metin"].get("osm")) or t)  # Osmanlıcası yoksa satır boş kalmasın (hiza bozulmasın)
+            uz += len(t)
         if tr:
-            parcalar.append({"name": f"Parca_{i:03d}", "tr": "\n".join(tr), "osm": "\n".join(osm)})
+            satirlar.append(tr)
+    for i, tr in enumerate(satirlar, 1):
+        parcalar.append({"name": f"Parca_{i:03d}", "tr": "\n".join(tr)})
     # dipnotlar: EPUB'daki numaralarla (görünüş sırası)
     sira = []
     for b in gor["bloklar"]:
@@ -88,19 +95,15 @@ def studyo_parcalari(kit):
             if g not in sira:
                 sira.append(g)
     if sira:
-        rakam = str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩")
         tr = ["DİPNOTLAR"] + [f"{n}. {_temiz(gor['dipnotlar'][g]['metin'].get(ana_dil))}" for n, g in enumerate(sira, 1)]
-        osm = ["حاشیه‌لر"] + [f"{str(n).translate(rakam)}. {_temiz(gor['dipnotlar'][g]['metin'].get('osm')) or _temiz(gor['dipnotlar'][g]['metin'].get(ana_dil))}"
-                             for n, g in enumerate(sira, 1)]
-        parcalar.append({"name": "Dipnot_001", "tr": "\n".join(tr), "osm": "\n".join(osm)})
+        parcalar.append({"name": "Dipnot_001", "tr": "\n".join(tr)})
     return parcalar
 
 
 def studyoya_gonder(kit):
     ku = kit["kunye"]
     baslik = ku["baslik"].get("tr") or ku["baslik"].get(ku.get("asil_dil", "tr")) or "Kitap"
-    govde = {"title": re.sub(r"\s+", " ", _YASAK.sub(" ", baslik)).strip(" ."),
-             "osm_title": ku["baslik"].get("osm", ""), "parts": studyo_parcalari(kit)}
+    govde = {"title": re.sub(r"\s+", " ", _YASAK.sub(" ", baslik)).strip(" ."), "parts": studyo_parcalari(kit)}
     r = requests.post(f"{STUDYO_URL}/api/jobs/from-kutuphane", json=govde, timeout=120)
     if r.status_code in (404, 405):
         raise RuntimeError("Stüdyo bu özelliği henüz bilmiyor (Stüdyo'yu güncelleyin: from-kutuphane)")

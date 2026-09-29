@@ -27,11 +27,17 @@ Sürümler:
   "Stüdyo'ya gönder": bölümler Türkçe + düzeltilmiş Osmanlıca hazır parçalar olarak Stüdyo'ya gider (Stüdyo'da
   /api/jobs/from-kutuphane); Stüdyo seslendirir ve PDF, Word, HTML, TXT biçimlerini kendi çıktı klasörüne kaydeder.
 
+- 0.5: İş akışı: ekle -> temizle, fihrist, kendi dilinde EPUB -> (Türkçe değilse) Türkçe çeviri (Translate paragraf
+  işi, gemma3:27b + kelam sözlüğü, kendiliğinden başlar) -> Osmanlıca ve Türkçe-Osmanlıca -> okuyup düzelt ->
+  "Stüdyo'ya gönder" (sadece Türkçe; Stüdyo seslendirir, Osmanlıcaya kendisi çevirir). OpenITI'nin düzeltilmemiş
+  OCR metinlerinde resim bağlantıları, varak işaretleri ve naşir dipnot numaraları temizlenir.
+
 Testler (sunucuda, kod klasöründe):
     docker run --rm -v "$PWD":/k -w /k berzahbey/dedplay-kutuphane:latest python tests/test_temel.py
     docker run --rm -v "$PWD":/k -w /k -e PYTHONPATH=/app berzahbey/dedplay-kutuphane:latest python tests/test_kaynak.py
     docker run --rm -v "$PWD":/k -w /k berzahbey/dedplay-kutuphane:latest python tests/test_okuma.py
     docker run --rm -v "$PWD":/k -w /k berzahbey/dedplay-kutuphane:latest python tests/test_studyo.py
+    docker run --rm -v "$PWD":/k -w /k berzahbey/dedplay-kutuphane:latest python tests/test_ceviri.py
 
 Sırada: taranmış Türkçe kitaplardaki Arapça satırların Arapça OCR'ı, Arapça eserlerin çevirisi (gemma3:27b).
 
