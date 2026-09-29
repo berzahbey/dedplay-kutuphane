@@ -838,6 +838,9 @@ def kitaba_cevir(ogeler, notlar, kunye):
         sayfa = [{"no": e, "konum": {"tr": 0}} for e in tasinan] + [{"no": e, "konum": {"tr": k}} for e, k in sayfalar]
         tasinan = []
         if o["tur"] == "baslik":
+            temiz2 = turkce_onar(temiz)
+            if len(temiz2) == len(temiz):  # uzunluk aynı kalır (harf değişimi): sayfa konumları geçerli
+                temiz = temiz2
             K.blok_ekle(kit, "baslik", {"tr": temiz}, seviye=o.get("seviye", 1), sayfalar=sayfa)
         else:
             K.blok_ekle(kit, "p", {"tr": temiz}, sayfalar=sayfa)
@@ -929,7 +932,7 @@ def _kunye_sec(bilgi, ad_baslik, ad_yazar, dosya_koku):
         yazar = meta_y
     else:
         yazar = turkcelestir(ad_yazar)
-    return baslik, yazar
+    return turkce_onar(baslik), turkce_onar(yazar)
 
 
 def _kapak_sec(satirlar, ad_baslik):
@@ -953,6 +956,63 @@ def _kapak_sec(satirlar, ad_baslik):
             if kapsama >= 0.8 and puan > iyi_puan:
                 iyi, iyi_puan = metin, puan
     return iyi
+
+
+_ESLER = {"o": "ö", "ö": "o", "u": "ü", "ü": "u", "s": "ş", "ş": "s", "c": "ç", "ç": "c", "g": "ğ", "ğ": "g", "i": "ı", "ı": "i"}
+
+
+def _tr_kucuk(w):
+    return w.replace("I", "ı").replace("İ", "i").lower()
+
+
+def _tr_buyuk(w):
+    return w.replace("i", "İ").replace("ı", "I").upper()
+
+
+def _gecerli(w):
+    kelimeler, _ = DZ._sozluk()
+    return w in kelimeler or DZ.gecerli_mi(w)
+
+
+def _kelime_onar(kucuk):
+    """Geçersiz kelimenin noktası/şapkası kaybolmuş doğru hâli: önce kelime listesindeki iskelet eşi, yoksa Zemberek'e
+    sorarak (en az değişiklikle). Bulunamazsa None."""
+    if len(kucuk) < 2 or _gecerli(kucuk):
+        return None
+    _, iskelet = DZ._sozluk()
+    aday = iskelet.get(kucuk.translate(DZ._TR_ISKELET))
+    if aday and aday != kucuk:
+        return aday
+    yerler = [i for i, c in enumerate(kucuk) if c in _ESLER][:6]
+    import itertools
+    for adet in range(1, len(yerler) + 1):
+        for secim in itertools.combinations(yerler, adet):
+            k = list(kucuk)
+            for i in secim:
+                k[i] = _ESLER[k[i]]
+            k = "".join(k)
+            if DZ.gecerli_mi(k):
+                return k
+    return None
+
+
+def turkce_onar(metin):
+    """Başlık, kitap adı ve yazar için harf onarımı (OCR'ın kaybettiği nokta/şapka: 'SÖZÜN OZÜ' -> 'SÖZÜN ÖZÜ').
+    Büyük/küçük harf düzeni korunur; karşılığı bulunamayan kelimeye (özel ad) dokunulmaz."""
+    if not metin or DZ is None:
+        return metin
+
+    def onar(m):
+        w = m.group(0)
+        dogru = _kelime_onar(_tr_kucuk(w))
+        if not dogru:
+            return w
+        if w.isupper():
+            return _tr_buyuk(dogru)
+        if w[:1].isupper():
+            return _tr_buyuk(dogru[0]) + dogru[1:]
+        return dogru
+    return re.sub(r"[^\W\d_]+", onar, metin)
 
 
 def turkcelestir(s):

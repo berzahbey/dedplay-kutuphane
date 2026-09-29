@@ -109,5 +109,14 @@ og = [{"tur": "baslik", "metin": t, "boy": b, "ocr": True} for t, b in
 kaynak._seviyeler(og)
 ok([o["seviye"] for o in og] == [1, 2, 1, 2], "Seviye: Birinci/İkinci Bölüm aynı (en üst) seviyede")
 
+# başlık / kitap adı harf onarımı (OCR'ın kaybettiği nokta ve şapka)
+ONAR = {"İTİKATTA SÖZÜN OZÜ": "İTİKATTA SÖZÜN ÖZÜ", "SEMİ' (İŞİTME) VE BASAR (GORME)": "SEMİ' (İŞİTME) VE BASAR (GÖRME)",
+        "Allah'ın Varlıgı": "Allah'ın Varlığı", "Itikatta Sozun Ozu": "İtikatta Sözün Özü", "HAYAT SIFATI": "HAYAT SIFATI",
+        "Mârifetnâme": "Mârifetnâme", "İmam Gazali": "İmam Gazali", "BİRİNCİ BÖLÜM": "BİRİNCİ BÖLÜM"}
+ok(all(kaynak.turkce_onar(a) == b for a, b in ONAR.items()), f"Harf onarımı {[(a, kaynak.turkce_onar(a)) for a, b in ONAR.items() if kaynak.turkce_onar(a) != b]}")
+ok(kaynak._kunye_sec({"kapak_satirlari": [("İTİKATTA,", 30, 200), ("SÖZÜN OZÜ", 24, 240)], "baslik": "", "yazar": ""},
+                     "Itikatta Sozun Ozu", "Imam Gazali", "Imam Gazali - Itikatta Sozun Ozu") == ("İtikatta Sözün Özü", "İmam Gazali"),
+   "Kitap adı: iki satırlı kapak + OCR nokta hatası düzeltilir")
+
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)
