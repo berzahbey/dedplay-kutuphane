@@ -213,12 +213,12 @@ class _Uretici:
                 son = s["no"]
         osm = self.ana == "osm"
         rakam = (lambda x: x.translate(str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩"))) if osm else (lambda x: x)
-        parcalar = [("بولوم " if osm else "Bölüm ") + rakam(f"{self.bolum_no:03d}")]
+        etiket = ("بولوم " if osm else "Bölüm ") + rakam(f"{self.bolum_no:03d}")
         if bas:
-            parcalar.append(rakam(bas if not son or son == bas else f"{bas}-{son}"))
+            etiket += " (" + rakam(bas if not son or son == bas else f"{bas}-{son}") + ")"
         if baslik:
-            parcalar.append(baslik)
-        return " · ".join(parcalar)
+            etiket += " " + baslik
+        return etiket
 
     def bolum_xhtml(self, bloklar, dosya):
         self.bolum_notlari = {}

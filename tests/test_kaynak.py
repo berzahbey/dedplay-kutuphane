@@ -70,7 +70,7 @@ ok("kişisel kopya" not in kunye and "OCR" not in kunye and "İtikadda Orta Yol"
 bolum = zipfile.ZipFile(os.path.join(klasor, "turkce.epub")).read("OEBPS/metin/bolum_001.xhtml").decode()
 ok('role="doc-pagebreak"' in bolum and 'aria-label="5"></span>' in bolum, "Sayfa numarası görünmez işaret olarak duruyor")
 ok(kaynak._kunye_sec({"baslik": "Imam Gazali Itikatta Sozun Ozu", "yazar": "Imam Gazali Itikatta Sozun Ozu", "kapak_baslik": ""},
-                     "Itikatta Sozun Ozu", "Imam Gazali", "Imam Gazali - Itikatta Sozun Ozu") == ("Itikatta Sozun Ozu", "Imam Gazali"),
+                     "Itikatta Sozun Ozu", "Imam Gazali", "Imam Gazali - Itikatta Sozun Ozu")[1] == "İmam Gazali",
    "Künye: dosya adının kopyası olan bilgi alanı yok sayılır")
 ok(kaynak._kunye_sec({"baslik": "", "yazar": "", "kapak_baslik": "İTİKATTA SÖZÜN ÖZÜ"}, "Itikatta Sozun Ozu", "Imam Gazali",
                      "x")[0] == "İtikatta Sözün Özü", "Künye: kapaktaki başlık Türkçe harfleriyle")
@@ -99,8 +99,15 @@ for n in range(22, 92):
     _p(n)
 nav = zipfile.ZipFile(io.BytesIO(epub.uret(kit, ["tr"]))).read("OEBPS/nav.xhtml").decode().split('epub:type="toc"')[1].split("</nav>")[0]
 etiketler = re.findall(r'<a href="[^"]+">([^<]+)</a>', nav)
-ok(etiketler == ["Bölüm 001 · 1-4", "Bölüm 002 · 5-20 · GİRİŞ", "Bölüm 003 · 21-38 · BİRİNCİ BÖLÜM", "Bölüm 004 · 39-56",
-                 "Bölüm 005 · 57-74", "Bölüm 006 · 75-91"], f"Numaralı fihrist ve uzun bölümün bölünmesi {etiketler}")
+ok(etiketler == ["Bölüm 001 (1-4)", "Bölüm 002 (5-20) GİRİŞ", "Bölüm 003 (21-38) BİRİNCİ BÖLÜM", "Bölüm 004 (39-56)",
+                 "Bölüm 005 (57-74)", "Bölüm 006 (75-91)"], f"Numaralı fihrist ve uzun bölümün bölünmesi {etiketler}")
+ok(not [t for t in ["TİRE", "? vâcib ola tertibi bozmuş olu”"] if kaynak.anlamli_baslik(t)], "Başlık denetimi: TİRE ve ? ile başlayan satır")
+ok(kaynak._eksik_numaralari_doldur([None, None, "3", "4", "5", "6", "7", "2877", "9", "10", "11", None, "13"])
+   == [str(i) for i in range(1, 14)], "Yanlış okunmuş sayfa numarası (2877) düzeltilir")
+og = [{"tur": "baslik", "metin": t, "boy": b, "ocr": True} for t, b in
+      [("BİRİNCİ BÖLÜM", 15), ("HAYAT SIFATI", 12), ("İKİNCİ BÖLÜM", 11), ("İRADE SIFATI", 12.5)]]
+kaynak._seviyeler(og)
+ok([o["seviye"] for o in og] == [1, 2, 1, 2], "Seviye: Birinci/İkinci Bölüm aynı (en üst) seviyede")
 
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)

@@ -231,7 +231,16 @@ def _eksik_numaralari_doldur(nolar):
     k, adet = kayma.most_common(1)[0]
     if adet < 2:
         return nolar
-    return [n if n else (str(i + k) if i + k >= 1 else None) for i, n in enumerate(nolar)]
+    out = []
+    for i, n in enumerate(nolar):
+        if n and n.isdigit():
+            # yakın sayfalardaki kaymaya göre denetle (kitap ortasında boş/eksik sayfa kaymayı değiştirebilir)
+            komsu = [int(m) - j for j, m in enumerate(nolar) if m and m.isdigit() and 0 < abs(j - i) <= 8]
+            yerel = collections.Counter(komsu).most_common(1)[0][0] if komsu else k
+            if abs(int(n) - i - yerel) > 3:
+                n = None  # yanlış okunmuş (ör. 237 yerine 2877)
+        out.append(n if n else (str(i + k) if i + k >= 1 else None))
+    return out
 
 
 # ======================= PDF: paragraflar ve başlıklar =======================
@@ -388,6 +397,9 @@ def pdf_oku(yol, ilerleme=None):
         satirlar.append(kalan)
     nolar = _eksik_numaralari_doldur(nolar)
     bilgi["kapak_baslik"] = _kapak_basligi(satirlar[:3])
+    dolu = next((rows for rows in satirlar[:3] if any(_harf(r["text"]) >= 3 for r in rows)), [])
+    bilgi["kapak_satirlari"] = [(r["text"], r["h"], r["top"]) for r in sorted(dolu, key=lambda r: r["top"])
+                                if 2 <= len(r["text"]) <= 80 and _harf(r["text"]) >= 2]
     # ön ve son sayfalar (kapak, künye, içindekiler): Stüdyo'nun kuralı
     tut = TS.on_ve_son_sayfalari_at([[str(i)] + [r["text"] for r in satirlar[i]] for i in range(n)])
     kalan = [int(s[0]) for s in tut]
@@ -646,6 +658,10 @@ def anlamli_baslik(t):
     if TS.ICERIK_BASLIK.match(t) or BOLUM_NO.match(t) or re.fullmatch(
             r"(bölüm|kısım|fasıl|bab|kitap|makale)\s+([ivxlc]{1,6}|\d{1,3})[.:]?", t, re.I):
         return True
+    if not t[0].isalnum():
+        return False  # ? ile başlayan vb.
+    if len(t.split()) == 1 and len(re.sub(r"[^\w]", "", t)) < 5:
+        return False  # tek kelimelik kısa satır (TİRE): bilinen başlıklar yukarıda kabul edildi
     if t[0].islower() or (t.endswith((".", ",", ";")) and not re.search(r"\b(vs|bkz|s|c)\.$", t, re.I)):
         return False
     kelimeler = re.findall(r"[^\W\d_]{2,}", t)
@@ -692,7 +708,26 @@ def _basliklari_denetle(ogeler):
     return out
 
 
+_EK_BASLIK = re.compile(r"^(sonuç|hâtime|hatime|netice|takdim|dîbâce|dibace|kaynakça|bibliyografya|sözlük|lügatçe|"
+                        r"dizin|indeks|ekler?|mukaddime|önsöz|giriş|başlangıç)[.:]?$", re.I)
+
+
+def _kalip_baslik(t):
+    t = SAYFA_ISARET.sub("", t).strip()
+    return bool(TS.ICERIK_BASLIK.match(t) or BOLUM_NO.match(t) or _EK_BASLIK.match(t) or re.match(
+        r"(bölüm|kısım|fasıl|bab|kitap|makale)\s+([ivxlc]{1,6}|\d{1,3})\b", t, re.I))
+
+
 def _seviyeler(ogeler):
+    _seviyeler_boy(ogeler)
+    basliklar = [o for o in ogeler if o["tur"] == "baslik"]
+    kalip = [o for o in basliklar if _kalip_baslik(o["metin"])]
+    if len(kalip) >= 2:  # "Birinci Bölüm", "Önsöz"... her zaman en üstte; öteki başlıklar altında (en az 2. seviye)
+        for o in basliklar:
+            o["seviye"] = 1 if o in kalip else max(2, o["seviye"])
+
+
+def _seviyeler_boy(ogeler):
     """Başlık seviyesi (en çok 3). Metin katmanında punto güvenilir: boylardan. OCR'da satır yüksekliği harflere göre
     oynar: önce yazım biçimi (TAMAMI BÜYÜK HARF üst seviye), aynı biçim içinde %20'den büyük punto farkı."""
     basliklar = [o for o in ogeler if o["tur"] == "baslik"]
@@ -882,18 +917,69 @@ def _kunye_sec(bilgi, ad_baslik, ad_yazar, dosya_koku):
     kopya = lambda s: bool(ad_yazar) and sade(s) == sade(ad_yazar + " " + ad_baslik)
     meta_b = bilgi.get("baslik") if _anlamli(bilgi.get("baslik")) else ""
     meta_y = bilgi.get("yazar") if _anlamli(bilgi.get("yazar")) else ""
-    kapak = bilgi.get("kapak_baslik") or ""
-    if kapak and (_benzer(kapak, ad_baslik) or not ad_yazar):
+    satirlar = bilgi.get("kapak_satirlari") or ([(bilgi["kapak_baslik"], 1, 0)] if bilgi.get("kapak_baslik") else [])
+    kapak = _kapak_sec(satirlar, ad_baslik if ad_yazar else "")  # dosya adı "Yazar - Eser" değilse karşılaştırılamaz
+    if kapak:
         baslik = turkce_baslik(kapak)
     elif meta_b and not kopya(meta_b):
         baslik = meta_b
     else:
-        baslik = ad_baslik
+        baslik = turkcelestir(ad_baslik)
     if meta_y and not kopya(meta_y) and sade(meta_y) != sade(baslik) and sade(baslik) not in sade(meta_y):
         yazar = meta_y
     else:
-        yazar = ad_yazar
+        yazar = turkcelestir(ad_yazar)
     return baslik, yazar
+
+
+def _kapak_sec(satirlar, ad_baslik):
+    """Kapaktaki başlık satırları: en büyük satırdan başlayıp alttaki (ya da üstteki) büyük satırlar eklenir; dosya
+    adındaki kelimelerin en az %80'ini içeren en kısa birleşim seçilir. Dosya adı yoksa en büyük satır(lar)."""
+    from .katalog import sade
+    if not satirlar:
+        return ""
+    en = max(h for _, h, _ in satirlar)
+    buyuk = [(t.strip(" ,;:"), h) for t, h, _ in satirlar if h >= en * 0.5]
+    hedef = set(sade(ad_baslik).split())
+    if not hedef:
+        return " ".join(t for t, h in buyuk if h >= en * 0.95)
+    iyi, iyi_puan = "", 0
+    for bas in range(len(buyuk)):
+        for son in range(bas + 1, min(len(buyuk), bas + 4) + 1):
+            metin = " ".join(t for t, _ in buyuk[bas:son])
+            kel = set(sade(metin).split())
+            kapsama = len(kel & hedef) / len(hedef)
+            puan = kapsama - 0.05 * len(kel - hedef)
+            if kapsama >= 0.8 and puan > iyi_puan:
+                iyi, iyi_puan = metin, puan
+    return iyi
+
+
+def turkcelestir(s):
+    """Şapkasız/Türkçe harfsiz yazımı (dosya adı) kelime listesiyle düzeltir: 'Itikatta Sozun Ozu' -> 'İtikatta Sözün Özü'."""
+    if not s or DZ is None:
+        return s
+    kelimeler, iskelet = DZ._sozluk()
+    out = []
+    for w in s.split():
+        kk = DZ._kucuk(w)
+        if not w.isascii() or not kk.isalpha():
+            out.append(w)
+            continue
+        if w[:1] == "I" and (("i" + kk[1:]) in kelimeler or DZ.gecerli_mi("i" + kk[1:])):  # 'Imam' = İmam
+            out.append("İ" + w[1:])
+            continue
+        if kk in kelimeler:
+            out.append(w)
+            continue
+        dogru = iskelet.get(kk.translate(DZ._TR_ISKELET))
+        if not dogru:
+            out.append(w)
+            continue
+        if w[:1].isupper():
+            dogru = {"i": "İ", "ı": "I"}.get(dogru[0], dogru[0].upper()) + dogru[1:]
+        out.append(dogru)
+    return " ".join(out)
 
 
 def _dosya_adindan(yol):
