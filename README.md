@@ -32,6 +32,9 @@ Sürümler:
   "Stüdyo'ya gönder" (sadece Türkçe; Stüdyo seslendirir, Osmanlıcaya kendisi çevirir). OpenITI'nin düzeltilmemiş
   OCR metinlerinde resim bağlantıları, varak işaretleri ve naşir dipnot numaraları temizlenir.
 
+- 0.5.1: EPUB'un kendi fihristi ve PDF yer imleri kullanılır (başlıklar, seviyeler, ön sayfalar); bölünmüş kelime
+  onarımı ("oldu ğundan" -> "olduğundan", Stüdyo'nun düzeltme kodundan); kesme işareti boşlukları.
+
 Testler (sunucuda, kod klasöründe):
     docker run --rm -v "$PWD":/k -w /k berzahbey/dedplay-kutuphane:latest python tests/test_temel.py
     docker run --rm -v "$PWD":/k -w /k -e PYTHONPATH=/app berzahbey/dedplay-kutuphane:latest python tests/test_kaynak.py

@@ -118,5 +118,37 @@ ok(kaynak._kunye_sec({"kapak_satirlari": [("İTİKATTA,", 30, 200), ("SÖZÜN OZ
                      "Itikatta Sozun Ozu", "Imam Gazali", "Imam Gazali - Itikatta Sozun Ozu") == ("İtikatta Sözün Özü", "İmam Gazali"),
    "Kitap adı: iki satırlı kapak + OCR nokta hatası düzeltilir")
 
+# EPUB'un kendi fihristi (Calibre tipi: sınıflı <p> başlıklar, NCX, ön sayfalar, bozuk başlık yazısı)
+fixtur_uret.calibre_epub(os.path.join(klasor, "calibre.epub"))
+kit = kaynak.cevir(os.path.join(klasor, "calibre.epub"))
+bl = kit["bloklar"]
+ok(kit["kunye"].get("yapi") == "fihrist" and K.denetle(kit) == [], "EPUB fihristi: kitabın kendi fihristi kullanıldı")
+ok([(b["metin"]["tr"], b["seviye"]) for b in bl if b["tur"] == "baslik"] == [
+    ("MEDENİYETLERİN DEFTER-İ AMALİ: ANSİKLOPEDİLER", 1), ("I-BATIDA ANSİKLOPEDİ", 1), ("BİR TÜRÜN TARİH ÖNCESİ", 2),
+    ("BELGELER TEORİSİ.", 2), ("II — İSLÂM’DA ANSİKLOPEDİ", 1), ("İSLÂMIN KOZMOLOJİK DOKTRİNLERİ", 2), ("DOĞU KÜTÜPHANESİ", 1)],
+   "EPUB fihristi: başlıklar, seviyeler ve temiz yazılar (Roma rakamı korunur)")
+ok(not any(x in b["metin"]["tr"] for b in bl for x in ("CEMİL MERİÇ", "PINAR", "İçindekiler")), "EPUB fihristi: ön sayfalar atıldı")
+ok(any(b["metin"]["tr"].startswith("Doğu kütüphanesi hakkında") for b in bl), "EPUB fihristi: başlığa benzeyen paragraf kaybolmadı")
+ok(any("Nasır’ın {{n0001}} tezini" in b["metin"]["tr"] for b in bl) and len(kit["dipnotlar"]) == 1, "Kesme işareti boşluğu ve ( 2 ) dipnotu")
+import zipfile as _z, io as _io
+_nav = _z.ZipFile(_io.BytesIO(epub.uret(kit, ["tr"]))).read("OEBPS/nav.xhtml").decode()
+ok("Bölüm 001" not in _nav and "MEDENİYETLERİN DEFTER-İ AMALİ" in _nav, "Orijinal fihrist olduğu gibi (numaralandırılmaz)")
+
+# PDF yer imleri (bookmarks): başlıklar oradan; sayfada bulunamayan yer imi sayfa başına eklenir
+import fitz
+fixtur_uret.pdf_yaz(os.path.join(klasor, "yi.pdf"), "katman")
+_d = fitz.open(os.path.join(klasor, "yi.pdf"))
+_sayfa = lambda y: next(i + 1 for i, pg in enumerate(_d) if i >= 3 and y in pg.get_text())  # içindekiler sayfası hariç
+_d.set_toc([[1, "Önsöz", _sayfa("ÖNSÖZ")], [1, "Birinci Bölüm: İlmin Şerefi", _sayfa("BİRİNCİ BÖLÜM")],
+            [2, "Şüphe ve İlim", _sayfa("zorun-")], [1, "İKİNCİ BÖLÜM", _sayfa("İKİNCİ BÖLÜM")], [2, "Kelâmın Önemi", _sayfa("Kelâmın Önemi")],
+            [1, "SONUÇ", _sayfa("SONUÇ")]])
+_d.save(os.path.join(klasor, "yi2.pdf"))
+kit = kaynak.cevir(os.path.join(klasor, "yi2.pdf"))
+bas = [(b["metin"]["tr"], b["seviye"]) for b in kit["bloklar"] if b["tur"] == "baslik"]
+ok(kit["kunye"].get("yapi") == "fihrist" and K.denetle(kit) == [], "PDF yer imleri kullanıldı")
+ok([x[0] for x in bas] == ["Önsöz", "Birinci Bölüm: İlmin Şerefi", "Şüphe ve İlim", "İKİNCİ BÖLÜM", "Kelâmın Önemi", "SONUÇ"]
+   and [x[1] for x in bas] == [1, 1, 2, 1, 2, 1], f"PDF yer imleri: başlıklar ve seviyeler {bas}")
+ok(not any(b["tur"] == "baslik" and b["metin"]["tr"] == "İlmin Şerefi" for b in kit["bloklar"]), "Yer imi yokken tanınan alt başlık paragrafa döner")
+
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)

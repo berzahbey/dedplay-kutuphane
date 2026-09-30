@@ -93,7 +93,8 @@ class _Uretici:
         self.not_no = {}   # n0003 -> 1, 2, 3 (görünüş sırasıyla)
         self.sayfa_listesi = []  # (etiket, href)
         self.fihrist = []  # (seviye, etiket, href)
-        self.numarali = kit["kunye"].get("asil_dil") == "tr"  # elindeki kitaplar: "Bölüm 001 · 5-20 · Başlık"
+        # elindeki kitaplar: "Bölüm 001 (5-20) Başlık"; kitabın kendi fihristi varsa o olduğu gibi kullanılır
+        self.numarali = kit["kunye"].get("asil_dil") == "tr" and kit["kunye"].get("yapi") != "fihrist"
         self.bolum_no = 0
         self._sayfa_basi = self._sayfa_haritasi()
 

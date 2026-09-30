@@ -171,3 +171,42 @@ def hepsini_uret(klasor):
     d.save(os.path.join(klasor, "deneme.docx"))
     open(os.path.join(klasor, "deneme.txt"), "w", encoding="utf-8").write(
         "MUKADDİME\n\nBu metin düz yazı dosyasıdır.\n\nBİRİNCİ BÖLÜM\n\nİkinci paragraf burada başlar ve sonra\ndevam eder.\n")
+
+
+def calibre_epub(yol):
+    """Calibre'nin ürettiği tipteki EPUB (Işık Doğudan Gelir yapısı): başlıklar sınıflı <p>, fihrist NCX'te,
+    satırlar ya dosya başını ya başlığın id'sini gösterir; ön sayfalar; bozuk başlık yazısı; ' ’ ' boşlukları."""
+    from ebooklib import epub
+    b = epub.EpubBook(); b.set_identifier("calibre1"); b.set_title("Işık Doğudan Gelir"); b.set_language("tr")
+    b.add_author("Cemil Meriç")
+    def belge(ad, govde):
+        d = epub.EpubHtml(title=ad, file_name=ad, lang="tr"); d.content = "<html><body>" + govde + "</body></html>"; b.add_item(d); return d
+    kapak = belge("titlepage.xhtml", '<div><p> </p></div>')
+    s0 = belge("index_split_000.html", '<p class="block_1">IŞIK DOĞUDAN GELİR</p><p class="block_2">(EX ORİENTE LUX)</p>'
+               '<p class="block_1">CEMİL MERİÇ</p><p class="block_4">PINAR YAY I NLAR I</p>')
+    s1 = belge("index_split_001.html", '<p class="block_7">İçindekiler</p>'
+               '<p class="block_8"><a href="index_split_002.html#id_Toc1">MEDENİYETLERİN DEFTER-İ AMALİ: ANSİKLOPEDİLER</a></p>'
+               '<p class="block_9"><a href="index_split_002.html#id_Toc2">BİR TÜRÜN TARİH ÖNCESİ</a></p>'
+               '<p class="block_8"><a href="index_split_003.html#id_Toc3">II — İSLÂM’DA ANSİKLOPEDİ</a></p>')
+    s2 = belge("index_split_002.html", '<p class="block_11" id="id_Toc1">MEDENİYETLERİN DEFTER-İ AMALİ: ANSİKLOPEDİLER</p>'
+               '<p class="block_12"></p><p class="block_13" id="id_Toc2">I-BATIDA ANSİKLOPEDİ</p>'
+               '<p class="block_14" id="id_Toc3">BİR TÜRÜN TARİH ÖNCESİ</p>'
+               '<p class="block_15">Dilimize Fransızcadan aktarılmış ansiklopedi… Önce lisan iffetimizi korumaya çalışmışız.</p>'
+               '<p class="block_15">Yunanca aslı: «enkuklios paideia» yani bütün ilimleri kucaklayan eğitim.</p>'
+               '<p class="block_14" id="id_Toc4">BELGELER TEORİSİ.</p><p class="block_15">1) Birinci madde burada.</p>')
+    s3 = belge("index_split_003.html", '<p class="block_16" id="id_Toc5">II — İSLÂM ’ DA ANSİKLOPEDİ</p>'
+               '<p class="block_15">Onsekizinci Asır Ansiklopedisi üzerinde çok durduk.</p>')
+    s4 = belge("index_split_004.html", '<p class="block_18" id="id_Toc6">İ SLÂMIN KOZMOLOJİK DOKTRİNLE R İ</p>'
+               '<p class="block_15">Hüseyin Nasır ’ ın <a href="index_split_013.html#note_2">( 2 )</a> tezini okurken bunu anladım.</p>')
+    s5 = belge("index_split_005.html", '<p class="block_15">Doğu kütüphanesi hakkında bir giriş paragrafı, başlıksız.</p>')
+    n = belge("index_split_013.html", '<p class="block_20" id="note_2"><a href="index_split_004.html">2</a> The Cosmological Doctrines, 1964.</p>')
+    L = lambda h, t: epub.Link(h, t, h)
+    b.toc = [L("index_split_002.html", "MEDENİYETLERİN DEFTER-İ AMALİ: ANSİKLOPEDİLER"),
+             (epub.Section("I-BATIDA ANSİKLOPEDİ", "index_split_002.html#id_Toc2"),
+              [L("index_split_002.html#id_Toc3", "BİR TÜRÜN TARİH ÖNCESİ"), L("index_split_002.html#id_Toc4", "BELGELER TEORİSİ.")]),
+             (epub.Section("II — İSLÂM’DA ANSİKLOPEDİ", "index_split_003.html"),
+              [L("index_split_004.html", "İSLÂMIN KOZMOLOJİK DOKTRİNLERİ")]),
+             L("index_split_005.html", "DOĞU KÜTÜPHANESİ")]
+    b.add_item(epub.EpubNcx()); b.add_item(epub.EpubNav())
+    b.spine = [kapak, s0, s1, s2, s3, s4, s5, n]
+    epub.write_epub(yol, b)
