@@ -98,15 +98,16 @@ def _ocr_sayfa(args):
     import fitz
     import pytesseract
     from PIL import Image, ImageOps
-    yol, i, dil = args
+    yol, i, dil = args[:3]
+    ayar = args[3] if len(args) > 3 else ""
     page = fitz.open(yol)[i]
     olcek = 72 / OCR_DPI
     pix = page.get_pixmap(dpi=OCR_DPI)
     img = ImageOps.autocontrast(Image.open(io.BytesIO(pix.tobytes("png"))).convert("L"))
     try:
-        d = pytesseract.image_to_data(img, lang=dil, output_type=pytesseract.Output.DICT)
+        d = pytesseract.image_to_data(img, lang=dil, config=ayar, output_type=pytesseract.Output.DICT)
     except Exception:
-        d = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+        d = pytesseract.image_to_data(img, config=ayar, output_type=pytesseract.Output.DICT)
     satir, sira = {}, []
     for k in range(len(d["text"])):
         t = (d["text"][k] or "").strip()
@@ -126,8 +127,8 @@ def _ocr_sayfa(args):
         for k, (_, t, h, _, _) in enumerate(ws):
             if k > 0 and lh and h < lh * 0.62 and re.fullmatch(r"[\d]{1,3}", t):
                 parca.append("\ue000" + t + "\ue001")  # küçük (üst simge) dipnot numarası
-            elif k > 0 and lh and h < lh * 0.6 and re.fullmatch(r"[\d\W]+", t):
-                continue
+            elif k > 0 and lh and h < lh * 0.6 and re.fullmatch(r"[\d\W]+", t) and not ayar:
+                continue  # (içindekiler okumasında nokta dizisi korunur)
             else:
                 parca.append((" " if parca else "") + t)
         metin = TS.norm("".join(parca))
@@ -222,17 +223,33 @@ def _pdf_kapak(doc):
     return None
 
 
+def _harf_farki(a, b):
+    """İki yazı arasındaki harf farkı (Levenshtein)."""
+    onceki = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        simdi = [i]
+        for j, cb in enumerate(b, 1):
+            simdi.append(min(onceki[j] + 1, simdi[j - 1] + 1, onceki[j - 1] + (ca != cb)))
+        onceki = simdi
+    return onceki[-1]
+
+
 def _icindekiler_basligi(t):
-    """'İÇİNDEKİLER', 'İçindekiler:', 'FİHRİST' (büyük İ'nin küçültülmesindeki birleşik nokta dahil)."""
+    """'İÇİNDEKİLER', 'İçindekiler:', 'FİHRİST' (büyük İ'nin küçültülmesindeki birleşik nokta dahil); bozuk OCR
+    ('iONDEKİ LER') en çok 2 harf farkla."""
     t = "".join(c for c in unicodedata.normalize("NFKD", t.strip(" .:")) if not unicodedata.combining(c))
-    return t.lower().replace("ı", "i") in ("icindekiler", "fihrist", "contents", "table of contents")
+    t = t.lower().replace("ı", "i")
+    if t in ("icindekiler", "fihrist", "contents", "table of contents"):
+        return True
+    sik = re.sub(r"[\W\d_]", "", t)
+    return 8 <= len(sik) <= 14 and _harf_farki(sik, "icindekiler") <= 2
 
 
 def _icindekiler_sayfasi(rows):
     """Basılı içindekiler sayfası mı: başlığında İçindekiler/Fihrist ya da satırlarının çoğu sayfa numarasıyla bitiyor."""
     if not rows:
         return False
-    if any(TS.ICINDEKILER.search(r["text"]) and len(r["text"]) < 40 for r in rows[:4]):
+    if any((TS.ICINDEKILER.search(r["text"]) and len(r["text"]) < 40) or _icindekiler_basligi(r["text"]) for r in rows[:4]):
         return True
     return len(rows) >= 6 and sum(1 for r in rows if TS.NOKTALI.search(r["text"])) >= 0.6 * len(rows)
 
@@ -374,8 +391,9 @@ def _kenar_numaralari_at(rows):
                                     (r["x0"] >= sag - 2 or r["x1"] <= sol + 2))]
 
 
-def _sayfa_paragraflari(rows, genislik, govde, kalin_oran):
-    """Bir sayfanın ana satırları -> [(tür, metin, boy)] (tür 'b' başlık ya da 'p')."""
+def _sayfa_paragraflari(rows, genislik, govde, kalin_oran, bas_ayri=False):
+    """Bir sayfanın ana satırları -> [(tür, metin, boy)] (tür 'b' başlık ya da 'p').
+    bas_ayri: art arda başlık satırları birleştirilmez (içindekilerden fihrist: hangisinin ne olduğunu o söyler)."""
     rows = _kenar_numaralari_at(rows)
     if not rows:
         return []
@@ -407,6 +425,10 @@ def _sayfa_paragraflari(rows, genislik, govde, kalin_oran):
     paras = []
     for grup in out:
         tur = grup[0][0]
+        if bas_ayri and tur == "b":  # başlık bloğu satır satır: ilki "b", devamı "b+"
+            for n, (_, r) in enumerate(grup):
+                paras.append(("b" if n == 0 else "b+", r["text"], r["h"]))
+            continue
         metin = TS.join_lines("\n".join(r["text"] for _, r in grup))
         paras.append((tur, metin, max(r["h"] for _, r in grup)))
     return paras
@@ -476,6 +498,537 @@ def _notlari_bol(dip_paras):
     return out
 
 
+# ======================= PDF: basılı içindekilerden fihrist =======================
+_TOC_SATIR = re.compile(r"^(?P<t>.*?\S)\s*(?:(?:…\s?|(?:[.·•_]\s?){2,})+[^\d]{0,15}?|\s)\s*(?P<n>\d{1,4})[\s,;'’`]{0,4}$")
+_TOC_NOKTALI = re.compile(r"^(?P<t>.*?[^\W\d_].*?)\s*(?:[.…·•_]\s?){3,}")
+_TOC_ROMA = re.compile(r"^(?P<t>.*?\S)\s*(?:…\s?|(?:[.·•_\-–]\s?){2,})+\s*(?P<n>[ivxlcdmIVXLCDM]{1,7})\s*$")
+_TOC_ATLA = re.compile(r"^(sayfa|sahife|s\.|page|pp?\.)$", re.I)
+
+
+def _toc_temiz(t):
+    """Başlık yazısı: sondaki nokta dizisi / OCR kırıntısı atılır."""
+    t = re.sub(r"\s*(?:…|(?:[.·•_]\s?){2,}).*$", "", t)
+    return t.strip(" .:-–—·•_…")
+
+
+def _ayni_satir(rows):
+    """Aynı satırdaki parçalar birleşir: OCR katmanı başlığı ve sayfa numarasını ayrı satır (çoğu zaman farklı boyda)
+    yazmış olabilir. Ölçüt dikey örtüşme; sağda uzakta duran numaranın önüne '…' konur (nokta dizisi yerine)."""
+    gruplar = []
+    for r in sorted(rows, key=lambda r: (r["top"] + r["bot"]) / 2):
+        g = gruplar[-1] if gruplar else None
+        if g:
+            ust, alt = max(g["top"], r["top"]), min(g["bot"], r["bot"])
+            if alt - ust > 0.5 * min(g["bot"] - g["top"], r["bot"] - r["top"]):
+                g["p"].append(r)
+                g["top"], g["bot"] = min(g["top"], r["top"]), max(g["bot"], r["bot"])
+                continue
+        gruplar.append({"p": [r], "top": r["top"], "bot": r["bot"]})
+    out = []
+    for g in gruplar:
+        ps = sorted(g["p"], key=lambda r: r["x0"])
+        yazi = ps[0]["text"]
+        for a, b in zip(ps, ps[1:]):
+            uzak = b["x0"] - a["x1"] > 3 * max(a["h"], 5)
+            yazi += (" … " if uzak and TS.PAGE_NUM.match(b["text"].strip()) else " ") + b["text"]
+        harfli = [r for r in ps if _harf(r["text"]) >= 2]
+        out.append(dict(ps[0], text=yazi, x1=ps[-1]["x1"], top=g["top"], bot=g["bot"],
+                        h=harfli[0]["h"] if harfli else ps[0]["h"]))
+    return out
+
+
+_TOC_NO_KARAKTER = "0123456789ivxlcdmIVXLCDM"
+
+
+def _ocr_icindekiler(yol, i, dil):
+    """Taranmış içindekiler sayfası. Tesseract nokta dizili satırları olağan kipte atlar ya da birleştirir; seyrek metin
+    kipi (--psm 11) kelimeleri tek tek bulur, nokta dizisi düşük güvenli çöp olarak kalır ve atılır. Okunamayan tek haneli
+    sayfa numaraları, satırın sağ ucundan (nokta dizisinin bittiği yer) kesilen parçada yeniden okunur."""
+    import fitz
+    import pytesseract
+    from PIL import Image, ImageOps
+    page = fitz.open(yol)[i]
+    olcek = 72 / OCR_DPI
+    img = ImageOps.autocontrast(Image.open(io.BytesIO(page.get_pixmap(dpi=OCR_DPI).tobytes("png"))).convert("L"))
+    try:
+        d = pytesseract.image_to_data(img, lang=dil, config="--psm 11", output_type=pytesseract.Output.DICT)
+    except Exception:
+        d = pytesseract.image_to_data(img, config="--psm 11", output_type=pytesseract.Output.DICT)
+    kel = []
+    for k, t in enumerate(d["text"]):
+        t, guven = (t or "").strip(), float(d["conf"][k])
+        if not t or guven < 30 or re.fullmatch(r"[\W_]+", t):
+            continue  # nokta dizisinden doğan çöp ("LELE", "LL") güveni 25'in altında kalır
+        x, y, w, h = d["left"][k], d["top"][k], d["width"][k], d["height"][k]
+        if guven < 92 and _harf(t) >= 2:  # şüpheli kelime (ör. "OÖONSOZ"): tek başına kesilip yeniden okunur
+            try:
+                e = pytesseract.image_to_data(img.crop((x - h // 2, y - h // 2, x + w + h // 2, y + h + h // 2)), lang=dil,
+                                              config="--psm 7", output_type=pytesseract.Output.DICT)
+                yeni = [(e["text"][j].strip(), float(e["conf"][j])) for j in range(len(e["text"])) if e["text"][j].strip()]
+                if len(yeni) == 1 and yeni[0][1] > guven:
+                    t, guven = yeni[0]
+            except Exception:
+                pass
+        if guven >= 50:
+            kel.append({"t": t, "x0": x, "x1": x + w, "top": y, "h": h})
+    satirlar = []
+    for w in sorted(kel, key=lambda w: w["top"] + w["h"] / 2):
+        orta = w["top"] + w["h"] / 2
+        s = next((s for s in satirlar if abs(s["orta"] - orta) < 0.6 * max(s["hs"] + [w["h"]])), None)
+        if s:
+            s["k"].append(w); s["hs"].append(w["h"])
+        else:
+            satirlar.append({"orta": orta, "k": [w], "hs": [w["h"]]})
+    no_mu = lambda t: re.fullmatch(r"\d{1,4}|[ivxlcdmIVXLCDM]{1,7}", t)
+    for s in satirlar:
+        s["k"].sort(key=lambda w: w["x0"])
+    ters = ImageOps.invert(img).point(lambda v: 255 if v > 90 else 0)
+    rows = []
+    for s in satirlar:
+        ws = s["k"]
+        h = st.median(s["hs"])
+        metin = " ".join(w["t"] for w in ws)
+        kutu = ters.crop((0, int(s["orta"] - h * 0.7), img.size[0], int(s["orta"] + h * 0.7))).getbbox()
+        sag = kutu[2] if kutu else 0  # satırdaki son mürekkep: nokta dizisinin sonundaki numara
+        if not (len(ws) > 1 and no_mu(ws[-1]["t"])) and sag > ws[-1]["x1"] + h * 3:
+            parca = img.crop((int(sag - h * 1.9), int(s["orta"] - h), int(sag + h * 0.4), int(s["orta"] + h)))
+            no = ""
+            for kip in ("7", "8", "10"):  # tek satır, tek kelime, tek karakter (Tesseract sürümüne göre biri okur)
+                try:
+                    no = pytesseract.image_to_string(parca, lang=dil, config="--psm " + kip +
+                                                     " -c tessedit_char_whitelist=" + _TOC_NO_KARAKTER).strip()
+                except Exception:
+                    no = ""
+                if re.fullmatch(r"\d{1,4}", no) and int(no) > 0:
+                    break
+            if re.fullmatch(r"\d{1,4}", no) and int(no) > 0:
+                metin += " … " + str(int(no))  # "06": numaranın önündeki nokta sıfır okunmuş
+        elif len(ws) > 1 and no_mu(ws[-1]["t"]):
+            metin = " ".join(w["t"] for w in ws[:-1]) + " … " + ws[-1]["t"]
+        metin = TS.norm(metin)
+        top = min(w["top"] for w in ws)
+        rows.append({"text": metin, "h": h * olcek, "top": top * olcek, "bot": max(w["top"] + w["h"] for w in ws) * olcek,
+                     "x0": ws[0]["x0"] * olcek, "x1": max(w["x1"] for w in ws) * olcek, "n": len(metin.split()),
+                     "kalin": False, "blok": 0, "ocr": True})
+    rows.sort(key=lambda r: r["top"])
+    return rows, page.rect.width, page.rect.height
+
+
+def _icindekiler_devami(yol, sayfalar, satirlar, toc_sayfalari):
+    """Taranmış içindekiler sayfası nokta dizilerine dayanıklı okumayla (_ocr_icindekiler) yeniden okunur (satirlar
+    yerinde güncellenir). Hemen ardındaki başlıksız sayfa, satırlarının çoğu içindekiler
+    girdisiyse (en az 3) içindekilerin devamıdır."""
+    if not toc_sayfalari:
+        return toc_sayfalari
+    dil = os.environ.get("OCR_LANG", "tur")
+
+    def oku(i):
+        if sayfalar[i][3]:
+            rows, w, h = _ocr_icindekiler(yol, i, dil)
+            return _sayfa_no_ve_kenar(rows, h)[1]
+        return satirlar[i]
+    out = []
+    for i in toc_sayfalari:
+        if i not in out:
+            satirlar[i] = oku(i)
+            out.append(i)
+        j = i + 1
+        while j < len(sayfalar) and j not in toc_sayfalari and j - 1 in out and j - out[0] < 8:
+            kalan = oku(j)
+            yazili = [r for r in kalan if _harf(r["text"]) >= 2]
+            if not yazili or len(icindekiler_girdileri([kalan])) < max(3, 0.6 * len(yazili)):
+                break
+            satirlar[j] = kalan
+            out.append(j)
+            j += 1
+    return sorted(set(out))
+
+
+def icindekiler_girdileri(sayfa_satirlari):
+    """Basılı içindekiler sayfalarının satırları -> [{'baslik', 'no', 'x0', 'ara'?}].
+    Ortadaki numarasız satırlar bölüm başlığıdır ('Birinci Bölüm' + 'Kavram ve Terim' -> 'Birinci Bölüm: Kavram ve
+    Terim', seviye 1). Soldaki numarasız 'BİRİNCİ BÖLÜM' ardındaki girdiye önek olur; küçük harfle süren satır bölünmüş
+    başlığın devamıdır; kalan numarasız satır kendi başına girdidir (yeri komşularından bulunur)."""
+    satirlar = []
+    for rows in sayfa_satirlari:
+        for r in _ayni_satir(rows):
+            t = UST.sub(r" \1", r["text"]).strip()  # küçük puntolu numara dipnot işareti sanılmış olabilir
+            if not t or _icindekiler_basligi(t) or _TOC_ATLA.match(t):
+                continue
+            if TS.PAGE_NUM.match(t):  # tek başına numara (aynı hizaya düşmemiş): hemen üstteki numarasız satırın
+                son = satirlar[-1] if satirlar else None
+                if son and son["no"] is None and not son.get("noktali") and r["top"] - son["bot"] < son["h"]:
+                    son["no"] = re.sub(r"\D", "", t) or t.strip().lower()
+                continue
+            m = _TOC_SATIR.match(_rakam(t)) or _TOC_ROMA.match(t)
+            if m and _harf(m.group("t")) >= 2:
+                satirlar.append({"t": _toc_temiz(m.group("t")), "no": m.group("n").lower(), "x0": r["x0"],
+                                 "x1": r["x1"], "h": r["h"], "bot": r["bot"]})
+            elif _TOC_NOKTALI.match(t):  # nokta dizili ama numarası okunamamış: yeri komşularından bulunur
+                satirlar.append({"t": _toc_temiz(_TOC_NOKTALI.match(t).group("t")), "no": None, "noktali": True,
+                                 "x0": r["x0"], "x1": r["x1"], "h": r["h"], "bot": r["bot"]})
+            elif _harf(t) >= 2:
+                satirlar.append({"t": _toc_temiz(t), "no": None, "x0": r["x0"], "x1": r["x1"], "h": r["h"], "bot": r["bot"]})
+    for s in satirlar:  # "Mantık nedir 9": sondaki sayı başlığın parçası değil
+        m = re.match(r"^(.*[^\W\d_].*?)\s+(\d{1,4})$", s["t"])
+        if m:
+            s["t"] = m.group(1).strip(" .:,;")
+            if s["no"] is None and not s.get("noktali"):
+                s["no"] = m.group(2)
+    numarali = [s for s in satirlar if s["no"]]
+    sol = st.median(s["x0"] for s in numarali) if numarali else min((s["x0"] for s in satirlar), default=0)
+    sag = st.median(s["x1"] for s in numarali) if numarali else max((s["x1"] for s in satirlar), default=0)
+    for s in satirlar:  # ortalanmış numarasız satır: bölüm başlığı
+        s["orta"] = s["no"] is None and not s.get("noktali") and s["x0"] > sol + 3 * max(s["h"], 8)
+    girdiler, k = [], 0
+    while k < len(satirlar):
+        s = satirlar[k]
+        if s["orta"]:
+            parca = [s["t"]]
+            while k + 1 < len(satirlar) and satirlar[k + 1]["orta"]:
+                k += 1
+                parca.append(satirlar[k]["t"])
+            if len(parca) > 1 and (BOLUM_NO.match(parca[0]) or _kalip_bolum(parca[0])):
+                baslik = parca[0].rstrip(" .:") + ": " + " ".join(parca[1:])
+            else:
+                baslik = " ".join(parca)
+            girdiler.append({"baslik": baslik, "no": None, "x0": s["x0"], "ara": True})
+        elif s["no"] is None and not s.get("noktali") and k + 1 < len(satirlar) and not satirlar[k + 1]["orta"]:
+            sonraki = satirlar[k + 1]
+            if BOLUM_NO.match(s["t"]) or _kalip_bolum(s["t"]):
+                sonraki["t"] = s["t"].rstrip(" .:") + ": " + sonraki["t"]
+            elif sonraki["t"][:1].islower() or s["x1"] > sol + 0.75 * (sag - sol):  # iki satıra bölünmüş başlık
+                sonraki["t"] = s["t"] + " " + sonraki["t"]
+                sonraki["x0"] = min(sonraki["x0"], s["x0"])
+            elif _buyuk_harfli(s["t"]) and not _buyuk_harfli(sonraki["t"]):
+                girdiler.append({"baslik": s["t"], "no": None, "x0": s["x0"], "ara": True})
+            else:
+                girdiler.append({"baslik": s["t"], "no": None, "x0": s["x0"]})
+        else:
+            girdiler.append({"baslik": s["t"], "no": s["no"], "x0": s["x0"]})
+        k += 1
+    girdiler = [g for g in girdiler if _harf(g["baslik"]) >= 2]
+    # sıradan sapan numara (OCR hatası: "Mantık nedir 9" ardından "Tarihsel bilgi 5"): yok sayılır, yeri komşularından
+    arap = [(k, int(g["no"])) for k, g in enumerate(girdiler) if g["no"] and g["no"].isdigit()]
+    for n, (k, no) in enumerate(arap):
+        sonraki = arap[n + 1][1] if n + 1 < len(arap) else None
+        onceki = arap[n - 1][1] if n > 0 else None
+        if sonraki is not None and no > sonraki and (onceki is None or onceki <= sonraki):
+            girdiler[k]["no"] = None
+    return girdiler
+
+
+def _sikistir_bosluklu(t):
+    from .katalog import sade
+    return sade(SAYFA_ISARET.sub("", t))
+
+
+_NUMARA_ONEKI = re.compile(r"^(?:[^\w\s]+|\d{1,3}[.)\-—–]*|[ivxlcı]{1,5}[.)\-—–]+|[a-zçğıöşü][.)\-—–]+|\S{1,3}<)\s*")
+
+
+def _kelimeler(t):
+    t = _aralik_topla(SAYFA_ISARET.sub("", t).strip()).replace("I", "ı").replace("İ", "i").lower()
+    for _ in range(3):  # "il< I. Mantık Nedir?" -> "mantık nedir" (numaralar sadeleştirmeden önce: nokta gerekli)
+        yeni = _NUMARA_ONEKI.sub("", t)
+        if yeni == t or not yeni:
+            break
+        t = yeni
+    return re.findall(r"\w+", _sikistir_bosluklu(t))
+
+
+def _toc_puan(metin, baslik):
+    """İçindekiler girdisi ile paragraf: 3 aynı, 2 kelime sınırında önek/içerme ("Kıyas" ≠ "Kıyasın tanımı"),
+    1 OCR hatalarına dayanıklı benzerlik, 0 değil."""
+    a, b = _kelimeler(metin), _kelimeler(baslik)
+    if not a or not b:
+        return 0
+    sa, sb = "".join(a), "".join(b)
+    if sa == sb:
+        return 3
+    if len(sa) <= len(sb) * 1.3 + 12 and (a[:len(b)] == b or b[:len(a)] == a or (len(sb) > 8 and sb in sa)):
+        return 2
+    return 1 if _bulanik_toc(metin, baslik) else 0
+
+
+def _sirali_ata(paras, basliklar):
+    """Bir sayfanın içindekiler girdileri -> {girdi sırası: paragraf nesnesi}. Girdiler paragraflarla sırayla eşleşir:
+    bir girdi, kendisinden sonraki girdinin en iyi eşleştiği paragrafı ve ötesini alamaz ("Kıyas" girdisi, sonraki
+    "Kıyasın tanımı"nın aşağısındaki "Kıyas çeşitleri:" satırına oturmasın)."""
+    puan = [[_toc_puan(m, b) if t != "sil" else 0 for t, m, _ in paras] for b in basliklar]
+    bagimsiz = [max(range(len(paras)), key=lambda k: (p[k], -k)) if paras and max(p) > 0 else None for p in puan]
+    out, son = {}, -1
+    for n, b in enumerate(basliklar):
+        ust = min((bagimsiz[j] for j in range(n + 1, len(basliklar)) if bagimsiz[j] is not None and bagimsiz[j] > son),
+                  default=len(paras))
+        aday = [k for k in range(son + 1, len(paras)) if puan[n][k] > 0 and
+                (k < ust or (k == ust and puan[n][k] > max(puan[j][k] for j in range(n + 1, len(basliklar)))))]
+        if not aday and ":" in b:  # "Üçüncü Bölüm: Hüküm ve Önerme": metinde yalnız ikinci kısım
+            ikinci = b.split(":", 1)[1]
+            aday = [k for k in range(son + 1, min(ust, len(paras))) if _toc_puan(paras[k][1], ikinci) > 0]
+        if aday:
+            k = max(aday, key=lambda k: (puan[n][k], -k)) if puan[n] and any(puan[n][k] for k in aday) else aday[0]
+            out[n], son = paras[k], k
+    return out
+
+
+def _en_iyi(paras, baslik, atla=()):
+    """Paragraflar içinde girdiye en çok benzeyen (ilk en yüksek puanlı) sıra ve puanı."""
+    en, puan = None, 0
+    for k, (t, m, b) in enumerate(paras):
+        if k in atla or t == "sil":
+            continue
+        p = _toc_puan(m, baslik)
+        if p > puan:
+            en, puan = k, p
+            if p == 3:
+                break
+    return en, puan
+
+
+def _benzer_toc(metin, baslik):
+    """İçindekiler başlığı bu paragraf mı: _benzer_baslik ya da OCR hatalarına dayanıklı benzerlik."""
+    return _benzer_baslik(metin, baslik) or _bulanik_toc(metin, baslik)
+
+
+def _bulanik_toc(metin, baslik):
+    """OCR hatalarına dayanıklı benzerlik (%82); sıra sayıları/rakamlar aynı olmalı."""
+    import difflib
+    a, b = _sikistir(SAYFA_ISARET.sub("", metin)), _sikistir(baslik)
+    if len(b) < 8 or not a or len(a) > len(b) * 1.3 + 12:
+        return False
+    ka, kb = [w for w in _kelimeler(metin) if len(w) > 1], [w for w in _kelimeler(baslik) if len(w) > 1]
+    if len(ka) != len(kb) and not (len(kb) >= 3 and abs(len(ka) - len(kb)) <= 1):
+        return False  # OCR harf hatası kelime sayısını değiştirmez (bölünmüş kelime: uzun başlıkta bir fark)
+    sira = lambda t: re.findall(r"birinci|ikinci|ucuncu|dorduncu|besinci|altinci|yedinci|sekizinci|dokuzuncu|onuncu|\d+|"
+                                r"\b[ivxlc]{1,6}\b", _sikistir_bosluklu(t))
+    if sira(metin) and sira(baslik) and sira(metin) != sira(baslik):
+        return False  # "İKİNCİ BÖLÜM" ≠ "BİRİNCİ BÖLÜM" (yazıca %87 benzer)
+    return difflib.SequenceMatcher(None, a[:len(b) + 4], b).ratio() >= 0.82 or \
+        difflib.SequenceMatcher(None, a[-len(b) - 4:], b).ratio() >= 0.82
+
+
+def _yazim_uygun(t):
+    return bool(t) and not re.search(r"[^\w\s.,:;?!'’()\-–—]", t)
+
+
+def _aralik_topla(t):
+    """Harf aralıklı başlık ("G İ R İ Ş") -> "GİRİŞ"."""
+    kel = t.split()
+    if len(kel) >= 3 and all(len(w) <= 2 for w in kel):
+        t = "".join(kel)
+        if sum(c.isupper() for c in t) > len(t) / 2:
+            t = _tr_buyuk(t)
+    return t
+
+
+def _gecersiz_kelime(t):
+    try:
+        return sum(1 for w in re.findall(r"[^\W\d_]{3,}|\w*\d\w*", t)
+                   if re.search(r"\d", w) or not _gecerli(_tr_kucuk(w)))
+    except Exception:
+        return 0
+
+
+def _yazim_sec(govde, toc, puan=3):
+    """Başlık yazısı: kitabın gövdedeki yazımı (orijinale sadakat) ya da içindekilerdeki. Gövde büyük harfliyse ve
+    içindekiler değilse içindekiler (küçük harf OCR'ı çok daha isabetli: "TUMEVAR1M" / "Tümevarım"). Gövdede
+    içindekilerde olmayan rakam (OCR: "tanım 1:") ya da tuhaf işaret varsa içindekiler."""
+    govde = _aralik_topla(govde)
+    if not _yazim_uygun(govde) or set(re.findall(r"\d", " ".join(_kelimeler(govde)))) - set(re.findall(r"\d", toc)):
+        return toc
+    g, t = _gecersiz_kelime(govde), _gecersiz_kelime(toc)  # Zemberek: "Kıyasm" / "özelliğı" geçersiz
+    if g < t and _buyuk_harfli(govde) and not _buyuk_harfli(toc):  # "KAVRAMIN ÖZELLİĞİ" + "Kavramın özelliğı"
+        gk, tk = govde.split(), toc.split()
+        if len(gk) == len(tk):
+            duz = []
+            for tw, gw in zip(tk, gk):
+                if _gecersiz_kelime(tw) and not _gecersiz_kelime(gw):
+                    gw = _tr_kucuk(gw)
+                    tw = (_tr_buyuk(gw[0]) + gw[1:]) if tw[:1].isupper() else gw
+                duz.append(tw)
+            return " ".join(duz)
+    if g != t:
+        return govde if g < t else toc
+    if puan <= 1 or (_buyuk_harfli(govde) and not _buyuk_harfli(toc)):
+        return toc
+    return govde
+
+
+def _toc_basligi_yerlestir(paras, k, meta_b, bas):
+    """İçindekiler girdisi paras[k]'da bulundu. Birleşmiş başlık satırlarından artan ayrı paragraf olur; 'Birinci Bölüm:
+    Kavram ve Terim' girdisinin ikinci kısmı sonraki paragrafsa ona katılır. Döndürür: başlık yazısı; metindeki yazım
+    temizse kitabın kendi yazımı (orijinale sadakat), değilse içindekilerdeki."""
+    import difflib
+    yazi = lambda kk: SAYFA_ISARET.sub("", paras[kk][1]).strip()
+    benzer = lambda x, y: difflib.SequenceMatcher(None, _sikistir(x), _sikistir(y)).ratio()
+    bas_kismi, artan = _basligi_ayir(paras[k][1], bas)
+    if artan:  # "İKİNCİ BÖLÜM ÖNERMELER Önermenin Tanımı" -> başlık + ayrı paragraf
+        paras[k:k + 1] = [("p", bas_kismi, paras[k][2]), ("p", artan, paras[k][2])]
+        for kk in sorted([kk for kk in meta_b if kk > k], reverse=True):
+            meta_b[kk + 1] = meta_b.pop(kk)
+    govde = yazi(k)
+    hedef, kk = _sikistir(bas), k + 1  # iki satıra bölünmüş başlık: devamı sonraki paragraf(lar)da
+    while ":" not in bas and hedef.startswith(_sikistir(govde)) and len(_sikistir(govde)) < len(hedef) and kk < len(paras) \
+            and kk not in meta_b and paras[kk][0] != "sil":
+        parca = yazi(kk)
+        if not parca or not hedef[len(_sikistir(govde)):].startswith(_sikistir(parca)):
+            break
+        paras[kk] = ("sil", "", 0)
+        govde += " " + parca
+        kk += 1
+    if ":" in bas:
+        on, arka = [x.strip() for x in bas.split(":", 1)]
+        if benzer(govde, on) >= 0.85 and k + 1 < len(paras) and k + 1 not in meta_b and paras[k + 1][0] != "sil":
+            ikinci = yazi(k + 1)
+            if benzer(ikinci, arka) >= 0.75 and len(_sikistir(ikinci)) <= len(_sikistir(arka)) + 6:
+                paras[k + 1] = ("sil", "", 0)
+                govde, ikinci = _aralik_topla(govde), _aralik_topla(ikinci)
+                if _yazim_uygun(govde) and _yazim_uygun(ikinci):
+                    return govde.rstrip(" .:") + ": " + ikinci  # "BİRİNCİ BÖLÜM: KAVRAM VE TERİM" (büyük puntolu, isabetli)
+        return bas
+    puan = _toc_puan(govde, bas)
+    if puan >= 1 and len("".join(_kelimeler(govde))) <= len("".join(_kelimeler(bas))) + 3:
+        return _yazim_sec(govde, bas, puan)
+    return bas
+
+
+def _kisa_parcalari_birlestir(rows):
+    """Aynı satırda yan yana duran kısa parça (büyük ilk harf "G" + "İ R İş") bir sonraki parçayla birleşir."""
+    out = []
+    for r in rows:
+        p = out[-1] if out else None
+        if p and len(p["text"].strip()) <= 3 and r["x0"] >= p["x1"] - 2 and r["x0"] - p["x1"] < 2 * max(p["h"], r["h"]) \
+                and min(p["bot"], r["bot"]) - max(p["top"], r["top"]) > 0.4 * min(p["bot"] - p["top"], r["bot"] - r["top"]):
+            out[-1] = dict(r, text=p["text"].strip() + " " + r["text"], x0=p["x0"], h=max(p["h"], r["h"]),
+                           top=min(p["top"], r["top"]), bot=max(p["bot"], r["bot"]))
+            continue
+        out.append(r)
+    return out
+
+
+def _devam_satirlarini_birlestir(paras, meta_b, asil_b=()):
+    """İçindekiler kipinde başlık blokları satır satır ayrılır; başlık olarak kullanılmayan devam satırları ("p+")
+    önceki satırla yeniden tek paragraf olur."""
+    out, yeni_meta = [], {}
+    for k, (t, m, b) in enumerate(paras):
+        if t == "p+" and k not in meta_b and out and out[-1][0] == "p" and (len(out) - 1) not in yeni_meta:
+            out[-1] = ("p", TS.join_lines(out[-1][1] + "\n" + m), max(out[-1][2], b))
+            continue
+        # başlık sanılan (kalın) satırla başlayıp alt satırda küçük harfle süren cümle: tek paragraf
+        if t == "p" and k not in meta_b and k - 1 in asil_b and k - 1 not in meta_b and out and out[-1][0] == "p" \
+                and (len(out) - 1) not in yeni_meta and SAYFA_ISARET.sub("", m).lstrip()[:1].islower() \
+                and not SAYFA_ISARET.sub("", out[-1][1]).rstrip().endswith(END_PUNCT):
+            out[-1] = ("p", out[-1][1] + " " + m, max(out[-1][2], b))
+            continue
+        if k in meta_b:
+            yeni_meta[len(out)] = meta_b[k]
+        out.append(("p" if t == "p+" else t, m, b))
+    return out, yeni_meta
+
+
+def _basligi_ayir(metin, baslik):
+    """Paragraf başlıkla başlıyor ve devam ediyorsa (birleşmiş başlık satırları): (başlık kısmı, artan) ; değilse (metin, "")."""
+    hedef = _sikistir(baslik)
+    kel = metin.split(" ")
+    for n in range(1, len(kel)):
+        on = _sikistir(SAYFA_ISARET.sub("", " ".join(kel[:n])))
+        if on == hedef:
+            artan = " ".join(kel[n:]).strip()
+            return (" ".join(kel[:n]), artan) if _harf(artan) >= 2 else (metin, "")
+        if len(on) > len(hedef) or not hedef.startswith(on):
+            break
+    return metin, ""
+
+
+def _kalip_bolum(t):
+    return bool(re.match(r"^(bölüm|kısım|fasıl|bab|kitap|makale)\s+([ivxlc]{1,6}|\d{1,3})[.:]?$", t, re.I))
+
+
+def _toc_seviyeleri(girdiler):
+    """Seviye (en çok 3). Ortadaki bölüm başlıkları ('ara') 1; öteki girdiler girinti kümelerine göre, bölüm başlığı
+    varsa onun bir altı. Girinti yoksa: büyük harfli / 'Birinci Bölüm' kalıplı girdiler üst seviye.
+    İlk bölüm başlığından önceki girdiler (Önsöz gibi) 1."""
+    duz = [g for g in girdiler if not g.get("ara")]
+    kumeler = []
+    for x in sorted({round(g["x0"]) for g in duz}):
+        if not kumeler or x - kumeler[-1][-1] > 8:
+            kumeler.append([x])
+        else:
+            kumeler[-1].append(x)
+    kume = lambda g: next(k for k, c in enumerate(kumeler) if round(g["x0"]) in c)
+    say = collections.Counter(kume(g) for g in duz)
+    girintili = len([k for k in say if say[k] >= 2]) >= 2
+    ara_var = any(g.get("ara") for g in girdiler)
+    ust = [g for g in duz if _buyuk_harfli(g["baslik"]) or BOLUM_NO.match(g["baslik"].split(":")[0])]
+    ilk_ara = next((k for k, g in enumerate(girdiler) if g.get("ara")), len(girdiler))
+    for k, g in enumerate(girdiler):
+        if g.get("ara") or (ara_var and k < ilk_ara):
+            g["seviye"] = 1
+        elif girintili:
+            g["seviye"] = kume(g) + 1 + ara_var
+        elif ara_var:
+            g["seviye"] = 2
+        else:
+            g["seviye"] = 1 if (g in ust or len(ust) == len(duz)) else 2
+    kullanilan = sorted({g["seviye"] for g in girdiler})
+    for g in girdiler:
+        g["seviye"] = min(kullanilan.index(g["seviye"]) + 1, 3)
+
+
+def icindekiler_fihristi(girdiler, nolar, kalan, paras_of):
+    """Basılı içindekiler girdileri -> {pdf_sayfa_sırası: [(seviye, başlık)]} ya da None (güvenilir değil).
+    Başlık, gösterdiği sayfada ve yakınında (-1..+2, sıra bozulmadan) metinde aranır; bulunamazsa gösterdiği sayfanın başına.
+    paras_of(i): i. PDF sayfasının paragrafları [(tür, metin, boy)]."""
+    if len(girdiler) < 3:
+        return None
+    sayfa_of, kalan_set = {}, set(kalan)
+    for i, no in enumerate(nolar):  # yalnız metin sayfaları (içindekiler sayfasına yanlış okunmuş numara düşebilir)
+        if no and no not in sayfa_of and i in kalan_set:
+            sayfa_of[no] = i
+    eslenen = [g for g in girdiler if g["no"] in sayfa_of]
+    if len(eslenen) < max(3, 0.6 * sum(1 for g in girdiler if g["no"])):
+        return None  # numaraların çoğu kitapta yok
+    arap = [int(g["no"]) for g in eslenen if g["no"].isdigit()]
+    eslenen = [g for g in girdiler if g["no"] in sayfa_of or g["no"] is None]
+    if arap and sum(1 for a, b in zip(arap, arap[1:]) if b >= a) < 0.8 * (len(arap) - 1):
+        return None  # numaralar artmıyor: içindekiler değil (ör. dizin, kronoloji)
+    _toc_seviyeleri(girdiler)
+    imler, bulunan, onceki, bekleyen = collections.defaultdict(list), 0, -1, []
+    for k, g in enumerate(eslenen):
+        if g["no"] is None:
+            sonraki = next((sayfa_of[x["no"]] for x in eslenen[k + 1:] if x["no"]), max(kalan_set))
+            adaylar = [i for i in sorted(kalan_set) if max(onceki, 0) <= i <= sonraki]
+        else:
+            hedef = sayfa_of[g["no"]]
+            adaylar = sorted((i for i in range(hedef - 1, hedef + 3) if i in kalan_set and i >= onceki),
+                             key=lambda i: (abs(i - hedef), i))
+        puanlar = [(_en_iyi(paras_of(i), g["baslik"])[1], -n, i) for n, i in enumerate(adaylar)]
+        en = max(puanlar, default=(0, 0, None))
+        yer = en[2] if en[0] > 0 else None
+        if yer is not None:
+            bulunan += 1
+            onceki = yer  # sıra yalnız metinde bulunan başlıklarla ilerler (yanlış numara zincirleme bozmasın)
+            for yedek, gg in bekleyen:  # bulunamayanlar: kendi sayfaları bundan önceyse orada, değilse bunun önünde
+                imler[yedek if yedek is not None and yedek < yer else yer].append((gg["seviye"], gg["baslik"]))
+            bekleyen = []
+        elif g["no"] is None:
+            if g.get("ara") and adaylar:  # bulunamayan bölüm başlığı: sonraki bulunan girdinin önünde
+                bekleyen.append((None, g))
+            continue
+        else:
+            yedek = next((i for i in sorted(kalan_set) if i >= max(hedef, onceki)), None)
+            if yedek is not None and yedek - hedef <= 2:
+                bekleyen.append((yedek, g))
+            continue
+        imler[yer].append((g["seviye"], g["baslik"]))
+    for yedek, gg in bekleyen:  # sonda kalanlar
+        if yedek is not None:
+            imler[yedek].append((gg["seviye"], gg["baslik"]))
+    if bulunan < max(2, 0.4 * len(eslenen)):
+        return None  # başlıkların çoğu metinde yok: sayfa numaraları başka baskıya ait olabilir
+    return imler
+
+
 def pdf_oku(yol, ilerleme=None):
     """PDF -> (öğeler, dipnotlar, bilgi). öğe: {'tur': 'baslik'|'p', 'metin', 'boy'} ; metinde sayfa/dipnot işaretleri."""
     _gerekli()
@@ -499,6 +1052,7 @@ def pdf_oku(yol, ilerleme=None):
     kalan = [int(s[0]) for s in tut]
     # basılı içindekiler sayfaları (başta, sonda ya da önsözden sonra): metinden çıkar, kitabın sonuna eklenir
     toc_sayfalari = [i for i in range(n) if (i < max(20, n // 5) or i >= n - 15) and _icindekiler_sayfasi(satirlar[i])]
+    toc_sayfalari = _icindekiler_devami(yol, sayfalar, satirlar, toc_sayfalari)
     if toc_sayfalari:  # içindekiler sayfalarının arasına/devamına düşen numaralı satır sayfaları da
         kalan = [i for i in kalan if i not in toc_sayfalari]
     satirlar_k = _tekrar_edenleri_at([satirlar[i] for i in kalan])
@@ -518,14 +1072,31 @@ def pdf_oku(yol, ilerleme=None):
         if sy - 1 in set(kalan):
             imler[sy - 1].append((min(sv, 3), bas))
     yer_imi_modu = sum(len(v) for v in imler.values()) >= 3
+    parcalar = []  # her kalan sayfa: (gövde boyu, dipnot satırları, paragraflar)
+    for j, i in enumerate(kalan):
+        g = (govde_o if sayfalar[i][3] else govde_k) or govde
+        ana, dip = _dipnot_ayir(satirlar_k[j], sayfalar[i][2], g)
+        parcalar.append((g, dip, _sayfa_paragraflari(ana, sayfalar[i][1], g, kalin_oran)))
+    icindekiler_modu = False
+    if not yer_imi_modu and toc_sayfalari:  # yer imi yoksa: basılı içindekiler sayfası fihrist kaynağı
+        sira = {i: j for j, i in enumerate(kalan)}
+        ayri = []  # başlık satırları ayrı paragraf ("GİRİŞ" + "I. Mantık Nedir?" tek blok olmasın)
+        for j, i in enumerate(kalan):
+            g, dip, _ = parcalar[j]
+            ana, _ = _dipnot_ayir(satirlar_k[j], sayfalar[i][2], g)
+            ana = _kisa_parcalari_birlestir(ana)
+            ayri.append((g, dip, _sayfa_paragraflari(ana, sayfalar[i][1], g, kalin_oran, bas_ayri=True)))
+        toc_imler = icindekiler_fihristi(icindekiler_girdileri([satirlar[i] for i in toc_sayfalari]), nolar, kalan,
+                                         lambda i: ayri[sira[i]][2])
+        if toc_imler:
+            imler, yer_imi_modu, icindekiler_modu, parcalar = toc_imler, True, True, ayri
+            toc_girdi = sum(len(v) for v in imler.values())
     if yer_imi_modu:
         bilgi["yapi"] = "fihrist"
+        bilgi["fihrist_kaynagi"] = "icindekiler" if icindekiler_modu else "yer_imleri"
+    son_seviye, toc_girdi = 1, locals().get("toc_girdi", 0)
     for j, i in enumerate(kalan):
-        rows = satirlar_k[j]
-        w, h = sayfalar[i][1], sayfalar[i][2]
-        g = (govde_o if sayfalar[i][3] else govde_k) or govde
-        ana, dip = _dipnot_ayir(rows, h, g)
-        paras = _sayfa_paragraflari(ana, w, g, kalin_oran)
+        g, dip, paras = parcalar[j]
         dip_paras = [TS.join_lines(r["text"]) for r in dip]
         # sayfanın dipnotları: numaralı olanlar yeni, numarasız baştaki parça önceki sayfanın notunun devamı
         sayfa_notu = {}
@@ -577,19 +1148,46 @@ def pdf_oku(yol, ilerleme=None):
                 yeni_paras.append(("p", "".join("{{" + g + "}}" for g in bosta), govde))
         meta_b = {}  # yeni_paras sırası -> (seviye, yer imi başlığı)
         if yer_imi_modu:
-            yeni_paras = [("p" if t == "b" else t, m, b) for t, m, b in yeni_paras]
+            asil_b = {k for k, (t, m, b) in enumerate(yeni_paras) if t in ("b", "b+")}
+            # "b+": aynı başlık bloğunun devam satırı (içindekiler kipinde satırlar ayrı); eşleşmezse geri birleşir
+            yeni_paras = [("p" if t == "b" else "p+" if t == "b+" else t, m, b) for t, m, b in yeni_paras]
             eklenen = 0
-            for sv, bas in imler.get(i, []):
-                k = next((k for k, (t, m, b) in enumerate(yeni_paras) if k not in meta_b and _benzer_baslik(m, bas)), None)
-                if k is None:  # sayfada bulunamadı: sayfanın başına (önceki eklenenlerin ardına)
-                    yeni_paras.insert(eklenen, ("b", bas, 0))
-                    meta_b = {(kk + 1 if kk >= eklenen else kk): v for kk, v in meta_b.items()}
-                    k = eklenen
+            sayfa_imleri = imler.get(i, [])
+            atanan = _sirali_ata(yeni_paras, [b for _, b in sayfa_imleri]) if icindekiler_modu else {}
+            for n_im, (sv, bas) in enumerate(sayfa_imleri):
+                if icindekiler_modu:
+                    hedef_p = atanan.get(n_im)
+                    k = next((kk for kk, pp in enumerate(yeni_paras) if pp is hedef_p and kk not in meta_b), None) \
+                        if hedef_p is not None else None
+                else:
+                    k = next((k for k, (t, m, b) in enumerate(yeni_paras) if k not in meta_b and _benzer_baslik(m, bas)), None)
+                bulundu = k is not None
+                if k is None:  # sayfada bulunamadı: yer imi kipinde sayfanın başına; içindekilerde son başlığın ardına
+                    yer = (max(meta_b) + 1) if (icindekiler_modu and meta_b) else eklenen
+                    yeni_paras.insert(yer, ("b", bas, 0))
+                    meta_b = {(kk + 1 if kk >= yer else kk): v for kk, v in meta_b.items()}
+                    asil_b = {(kk + 1 if kk >= yer else kk) for kk in asil_b}
+                    k = yer
                     eklenen += 1
+                if icindekiler_modu and bulundu:
+                    once = len(yeni_paras)
+                    bas = _toc_basligi_yerlestir(yeni_paras, k, meta_b, bas)
+                    if len(yeni_paras) > once:  # paragraf bölündü: sonraki sıralar bir kaydı
+                        asil_b = {(kk + 1 if kk > k else kk) for kk in asil_b}
                 yeni_paras[k] = ("b", yeni_paras[k][1], yeni_paras[k][2])
                 meta_b[k] = (sv, bas)
+            if icindekiler_modu and toc_girdi < 15:  # kısa içindekiler (yalnız bölümler): gövdedeki belirgin büyük
+                for k in sorted(asil_b):                    # başlık önceki girdinin altına eklenir
+                    t, m, b = yeni_paras[k]
+                    if k not in meta_b and t == "p" and b >= g * 1.12 and anlamli_baslik(SAYFA_ISARET.sub("", m)):
+                        meta_b[k] = (None, None)
+                        yeni_paras[k] = ("b", m, b)
+        if icindekiler_modu:
+            yeni_paras, meta_b = _devam_satirlarini_birlestir(yeni_paras, meta_b, asil_b)
         etiket = "\ue002" + nolar[i] + "\ue003" if nolar[i] else ""
         for k, (tur, metin, boy) in enumerate(yeni_paras):
+            if tur == "sil":
+                continue
             ilk = k == 0
             onceki = ogeler[-1] if ogeler else None
             # sayfa geçişinde bölünen paragraf: öncekiyle birleştir
@@ -611,7 +1209,13 @@ def pdf_oku(yol, ilerleme=None):
                 continue
             if k in meta_b:  # yer iminden başlık: metni yer imindeki yazı
                 sv, bas = meta_b[k]
-                ogeler.append({"tur": "baslik", "metin": (etiket if ilk else "") + bas, "boy": 0, "seviye": sv, "fihrist": True})
+                if sv is None:  # içindekilerde olmayan başlık: kendi yazısı, bir alt seviye
+                    ogeler.append({"tur": "baslik", "metin": (etiket if ilk else "") + metin, "boy": boy,
+                                   "seviye": min(son_seviye + 1, 3), "fihrist": True, "onar": True})
+                    continue
+                son_seviye = sv
+                ogeler.append({"tur": "baslik", "metin": (etiket if ilk else "") + bas, "boy": 0, "seviye": sv, "fihrist": True,
+                               "onar": icindekiler_modu})
                 continue
             ogeler.append({"tur": "baslik" if tur == "b" else "p", "metin": (etiket if ilk else "") + metin, "boy": boy,
                            "ocr": sayfalar[i][3]})
@@ -624,6 +1228,11 @@ def pdf_oku(yol, ilerleme=None):
         for i in toc_sayfalari:
             for r in satirlar[i]:
                 t = re.sub(r"\s*(?:\.{2,}|…{2,})[^\s\d]{0,15}\s*(?=\d+\s*$)", " … ", r["text"].strip())  # "BÖLÜM.....u 6" -> "BÖLÜM … 6"
+                m = _TOC_SATIR.match(_rakam(r["text"].strip()))
+                if m and re.search(r"[.…·•_]{2,}", r["text"]):  # "SONUÇ .... eee 8" -> "SONUÇ … 8"
+                    t = _toc_temiz(m.group("t")) + " … " + m.group("n")
+                elif _TOC_NOKTALI.match(t) and not re.search(r"\d\s*$", t):  # numarası okunamamış
+                    t = _toc_temiz(_TOC_NOKTALI.match(t).group("t"))
                 if t and not _icindekiler_basligi(t) and not TS.PAGE_NUM.match(t):
                     ogeler.append({"tur": "p", "metin": t, "boy": 0, "koru": True})
     bilgi["govde_boyu"] = govde
@@ -1109,7 +1718,7 @@ def kitaba_cevir(ogeler, notlar, kunye):
         sayfa = [{"no": e, "konum": {"tr": 0}} for e in tasinan] + [{"no": e, "konum": {"tr": k}} for e, k in sayfalar]
         tasinan = []
         if o["tur"] == "baslik":
-            temiz2 = temiz if o.get("fihrist") else turkce_onar(temiz)  # kitabın kendi fihristindeki yazı zaten temiz
+            temiz2 = temiz if o.get("fihrist") and not o.get("onar") else turkce_onar(temiz)  # kitabın kendi fihristindeki yazı zaten temiz
             if len(temiz2) == len(temiz):  # uzunluk aynı kalır (harf değişimi): sayfa konumları geçerli
                 temiz = temiz2
             K.blok_ekle(kit, "baslik", {"tr": temiz}, seviye=o.get("seviye", 1), sayfalar=sayfa)

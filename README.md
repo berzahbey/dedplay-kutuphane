@@ -35,6 +35,8 @@ Sürümler:
 - 0.5.1: EPUB'un kendi fihristi ve PDF yer imleri kullanılır (başlıklar, seviyeler, ön sayfalar); bölünmüş kelime
   onarımı ("oldu ğundan" -> "olduğundan", Stüdyo'nun düzeltme kodundan); kesme işareti boşlukları.
 
+- 0.5.3: Basılı içindekilerden fihrist (PDF, yer imi yoksa): girdiler, girintiden seviye, başlık gösterdiği sayfada
+  aranır; taranmış içindekiler sayfası nokta dizilerine dayanıklı okunur; iki sayfalık içindekiler.
 - 0.5.2: Orijinale sadakat: kitap adı dosya adından (Türkçe harfliyse), kitabın kendi kapak görseli, basılı
   içindekiler sayfası kitabın sonuna, "Page N" yer imleri yok sayılır. OCR katmanında ayrı yazı tipli ı/ğ/ş parçaları
   kaynağında birleşir; normal boyda yazılmış dipnot numaraları sayfanın dipnotuna bağlanır; kenar numaraları

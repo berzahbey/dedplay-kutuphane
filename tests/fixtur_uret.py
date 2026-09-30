@@ -210,3 +210,157 @@ def calibre_epub(yol):
     b.add_item(epub.EpubNcx()); b.add_item(epub.EpubNav())
     b.spine = [kapak, s0, s1, s2, s3, s4, s5, n]
     epub.write_epub(yol, b)
+
+
+# ---- Basılı içindekilerden fihrist (Klasik Mantık tipi): başlıklar gövdeyle aynı puntoda (kalın), içindekiler iki
+# sayfa, girintili alt başlıklar, numarasız "BİRİNCİ BÖLÜM" satırı, iki satıra bölünmüş girdi, sayfa ortasında başlık
+M1 = ("Mantık, doğru düşünmenin kurallarını inceleyen bir ilimdir. Zihnin bilinenden bilinmeyene nasıl geçtiğini "
+      "gösterir ve bu geçişte yapılabilecek yanlışlardan korunmanın yollarını öğretir.")
+M2 = ("Her ilmin bir konusu, bir de gayesi vardır. Mantığın konusu malum kavramlar ve önermelerdir; gayesi ise "
+      "düşünceyi hatadan korumaktır. Bu sebeple eskiler ona alet ilmi adını vermişlerdir.")
+M3 = ("Kavram, bir şeyin zihindeki tasavvurudur. Kavramlar kelimelerle ifade edilir; fakat kelime ile kavram aynı "
+      "şey değildir, zira bir kavram farklı dillerde farklı kelimelerle anlatılabilir.")
+TOC_SAYFA1 = [(0, "ÖNSÖZ", "7"), (0, "GİRİŞ", "8"), (0, "BİRİNCİ BÖLÜM", None), (0, "KAVRAMLAR", "9"),
+              (1, "Kavramın Tanımı", "9"), (1, "Kavramların Birbirine Göre Durumları ve Beş Tümel", None), (1, "Meselesi", "11")]
+TOC_SAYFA2 = [(0, "İKİNCİ BÖLÜM", None), (0, "ÖNERMELER", "12"), (1, "Önermenin Tanımı", "12"),
+              (1, "Karşıt Önermeler", "13"), (0, "SONUÇ", "14")]
+MANTIK_GOVDE = [  # her öğe bir basılı sayfa (7'den başlar): ("ob", orta başlık) ("b", sol başlık) ("p", paragraf) ("k", kalın satır)
+    [("ob", "ÖNSÖZ"), ("p", M1), ("p", M2)],
+    [("ob", "GİRİŞ"), ("p", M2), ("p", M3)],
+    [("ob", "BİRİNCİ BÖLÜM"), ("ob", "KAVRAMLAR"), ("p", M1), ("b", "Kavramın Tanımı"), ("p", M3), ("k", "Örnek"), ("p", M2)],
+    [("p", M1 + " " + M2), ("p", M3)],
+    [("b", "Kavramların Birbirine Göre Durumları"), ("b", "ve Beş Tümel Meselesi"), ("p", M3), ("p", M1)],
+    [("ob", "İKİNCİ BÖLÜM"), ("ob", "ÖNERMELER"), ("b", "Önermenin Tanımı"), ("p", M2), ("p", M3)],
+    [("p", M1), ("b", "Karşıt Önermeler"), ("p", M2)],
+    [("ob", "SONUÇ"), ("p", M3)],
+]
+
+
+ACILIS_LISTE = (["Eski mantıkçılar bu konuyu uzun uzun tartışmıştır.", "Meseleyi bir misal ile açalım.",
+               "Burada dikkat edilecek nokta şudur.", "Bu bahis kitabın temelini teşkil eder.",
+               "Konuya başka bir yönden de bakılabilir.", "Şimdi asıl meseleye geçebiliriz.",
+               "Farabi bu hususta şöyle bir ayrım yapar.", "İbn Sina aynı görüşü daha açık ifade etmiştir.",
+               "Bu görüş sonraki asırlarda da kabul görmüştür.", "Kısaca söylemek gerekirse durum budur.",
+               "Bir örnek vermek faydalı olacaktır.", "Şu itiraz akla gelebilir.", "Cevabı açıktır.",
+               "Bu noktada iki görüş vardır.", "Birinci görüşe göre mesele basittir.", "İkinci görüş daha inceliklidir.",
+               "Netice itibarıyla ikisi de aynı yere varır.", "Bunu ileride tekrar ele alacağız."])
+
+
+def mantik_pdf(yol, kip="katman"):
+    tmp = fitz.open()
+    acilis = iter(list(ACILIS_LISTE))
+
+    def sayfa():
+        p = tmp.new_page(width=W, height=H)
+        p.insert_font(fontname="F", fontfile=SERIF); p.insert_font(fontname="B", fontfile=SERIF_B)
+        return p
+    p = sayfa(); p.insert_text((80, 250), "KLASİK MANTIK DENEMESİ", fontname="B", fontsize=18)
+    p = sayfa(); p.insert_text((SOL, UST), "Deneme Yayınları · ISBN 978-000-0000-00-0", fontname="F", fontsize=9)
+    for k, girdiler in enumerate((TOC_SAYFA1, TOC_SAYFA2)):
+        p = sayfa(); y = UST
+        if k == 0:
+            p.insert_text((150, y), "İÇİNDEKİLER", fontname="B", fontsize=BAS2); y += 30
+        for girinti, bas, no in girdiler:
+            x = SOL + 15 * girinti
+            p.insert_text((x, y), bas, fontname="F", fontsize=GOVDE)
+            if no:
+                bas_son = x + font_w(bas, SERIF, GOVDE) + 4
+                no_x = SAG - font_w(no, SERIF, GOVDE)
+                nokta = "." * int((no_x - bas_son - 4) / font_w(".", SERIF, GOVDE))
+                p.insert_text((bas_son, y), nokta, fontname="F", fontsize=GOVDE)
+                p.insert_text((no_x, y), no, fontname="F", fontsize=GOVDE)
+            y += GOVDE * 1.8
+    for n, ogeler in enumerate(MANTIK_GOVDE):
+        p = sayfa(); y = UST
+        p.insert_text((W / 2 - 6, H - 30), str(7 + n), fontname="F", fontsize=9)
+        for tur, metin in ogeler:
+            if tur == "ob":
+                p.insert_text((SOL + (SAG - SOL - font_w(metin, SERIF_B, GOVDE)) / 2, y), metin, fontname="B", fontsize=GOVDE)
+                y += GOVDE * 1.9
+            elif tur in ("b", "k"):
+                y += 4
+                p.insert_text((SOL, y), metin, fontname="B", fontsize=GOVDE); y += GOVDE * 1.7
+            else:
+                metin = next(acilis) + " " + metin  # tekrar eden satır üst bilgi sanılmasın
+                for j, sat in enumerate(satirlar(metin, SERIF, GOVDE, SAG - SOL - 18)):
+                    p.insert_text((SOL + (18 if j == 0 else 0), y), sat, fontname="F", fontsize=GOVDE); y += GOVDE * 1.45
+                y += 2
+    if kip == "katman":
+        tmp.save(yol); return
+    out = fitz.open()
+    for p in tmp:
+        yeni = out.new_page(width=W, height=H)
+        yeni.insert_image(yeni.rect, stream=p.get_pixmap(dpi=200).tobytes("png"))
+    out.save(yol)
+
+
+# ---- Klasik Mantık'ın gerçek içindekiler biçimi: eski OCR katmanlı PDF. Başlık bozuk ("iONDEKİ LER"), nokta dizisi
+# yok, sayfa numarası sağda AYRI satır (daha büyük), bölüm başlıkları ortada numarasız iki satır ("Birinci Bölüm" /
+# "Kavram ve Treim"), OCR hataları ("Mantık nedir 9" aslı 1, "özelliğı"), numarasız girdi, roma rakamlı önsöz
+KM_TOC = [("sol", "Önsöz", "v"), ("orta", "GİRİŞ", None), ("sol", "Mantık nedir", "9küçük"), ("sol", "Tarihsel bilgi", "3"),
+          ("orta", "Birinci Bölüm", None), ("orta", "Kavram ve Treim", None), ("sol", "Kavramın tanımı", "5"),
+          ("sol", "Kavramın özelliğı", "6"), ("sol", "Önerme çeşitleri", None), ("sol", "Yüklemli önermeler", "7"),
+          ("orta", "İkinci Bölüm", None), ("orta", "Önerme", None), ("sol", "Önermenin tanımı", "8"), ("sol", "Karşı olma", "9"),
+          ("sol", "Kıyas", "10"), ("sol", "Kıyasın tanımı", "10"), ("sol", "Kıyasın çeşitleri", "10"),
+          ("sol", "Döndürme", "11"),
+          ("sol", "Tümevarım", "11")]
+KM_GOVDE = [  # (basılı no, öğeler)
+    ("v", [("ob", "ÖNSÖZ"), ("p", M1)]), ("vi", [("p", M2)]),
+    ("1", [("og", "G İ R İ Ş"), ("b", "I. Mantık Nedir?"), ("p", M1)]), ("2", [("p", M2)]),
+    ("3", [("b", "II. Tarihsel Bilgi"), ("p", M3)]), ("4", [("p", M1)]),
+    ("5", [("ob", "BİRİNCİ BÖLÜM"), ("ob", "KAVRAM VE TERİM"), ("b", "Kavramın tanımı"), ("p", M2)]),
+    ("6", [("p", M3), ("b", "KAVRAMIN ÖZELLİĞİ"), ("p", M1)]),
+    ("7", [("b", "Önerme çeşitleri"), ("b", "Yüklemli önermeler"), ("p", M2), ("k", "Düz döndürme:"), ("p", M3)]),
+    ("8", [("ob", "İKİNCİ BÖLÜM"), ("ob", "ÖNERME"), ("b", "Önermenin tanımı"), ("p", M1)]),
+    ("9", [("p", M2), ("b", "Karşı olma"), ("p", M3), ("b", "Bu kısımda ele alınan meseleler"),
+           ("b", "üç ana başlık altında toplanır"), ("p", M1)]),
+    ("10", [("b", "Kıyasm tanımı :"), ("p", M1), ("b", "Kıyas çeşitleri:"), ("p", M2)]),
+    ("11", [("k", "Düz döndürme:"), ("p", M3), ("b", "TUMEVAR1M"), ("b", "Bu mesele eskiden beri tartışılan"),
+            ("p0", "bir konudur ve burada kısaca ele alınır.")]),
+]
+
+
+def klasik_mantik_pdf(yol):
+    tmp = fitz.open()
+    acilis = iter(list(ACILIS_LISTE) * 2)
+
+    def sayfa():
+        p = tmp.new_page(width=W, height=H)
+        p.insert_font(fontname="F", fontfile=SERIF); p.insert_font(fontname="B", fontfile=SERIF_B)
+        return p
+    p = sayfa(); p.insert_text((80, 250), "KLASIK MANTIK", fontname="B", fontsize=22)
+    p = sayfa(); y = UST
+    p.insert_text((135, y), "iONDEKİ LER", fontname="B", fontsize=16); y += 30
+    for yer, bas, no in KM_TOC:
+        x = SOL + 10 if yer == "sol" else SOL + (SAG - SOL - font_w(bas, SERIF, GOVDE)) / 2
+        p.insert_text((x, y), bas, fontname="F", fontsize=GOVDE)
+        if no and no.endswith("küçük"):  # başlığa yapışık küçük puntolu numara (dipnot işareti sanılır)
+            p.insert_text((x + font_w(bas, SERIF, GOVDE) + 1, y - 3), no[:-5], fontname="F", fontsize=7)
+        elif no:  # ayrı ve büyük yazılmış numara (eski OCR katmanı böyle bölmüş)
+            p.insert_text((SAG - 25, y + 1.5), no, fontname="F", fontsize=15)
+        y += GOVDE * 1.9
+    for no, ogeler in KM_GOVDE:
+        p = sayfa(); y = UST
+        p.insert_text((W / 2 - 6, H - 30), no, fontname="F", fontsize=9)
+        for tur, metin in ogeler:
+            if tur == "ob":
+                p.insert_text((SOL + (SAG - SOL - font_w(metin, SERIF_B, GOVDE)) / 2, y), metin, fontname="B", fontsize=GOVDE)
+                y += GOVDE * 1.9
+            elif tur == "og":  # büyük ilk harf ayrı parça (eski OCR katmanı "G" ve "İ R İ Ş"i ayrı yazmış)
+                x = SOL + (SAG - SOL - font_w(metin, SERIF_B, GOVDE)) / 2
+                p.insert_text((x, y + 1), metin[0], fontname="B", fontsize=GOVDE + 2)
+                p.insert_text((x + 20, y), metin[1:].strip(), fontname="B", fontsize=GOVDE)
+                y += GOVDE * 1.9
+            elif tur in ("b", "k"):
+                y += 4
+                p.insert_text((SOL, y), metin, fontname="B", fontsize=GOVDE); y += GOVDE * 1.7
+            elif tur == "p0":  # önceki (kalın) satırın devamı: girintisiz
+                y -= GOVDE * 0.25
+                for sat in satirlar(metin, SERIF, GOVDE, SAG - SOL):
+                    p.insert_text((SOL, y), sat, fontname="F", fontsize=GOVDE); y += GOVDE * 1.45
+            else:
+                metin = next(acilis) + " " + metin
+                for j, sat in enumerate(satirlar(metin, SERIF, GOVDE, SAG - SOL - 18)):
+                    p.insert_text((SOL + (18 if j == 0 else 0), y), sat, fontname="F", fontsize=GOVDE); y += GOVDE * 1.45
+                y += 2
+    tmp.save(yol)

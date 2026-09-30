@@ -156,5 +156,77 @@ ok([x[0] for x in bas] == ["Önsöz", "Birinci Bölüm: İlmin Şerefi", "Şüph
    and [x[1] for x in bas] == [1, 1, 2, 1, 2, 1, 1], f"PDF yer imleri: başlıklar ve seviyeler {bas}")
 ok(not any(b["tur"] == "baslik" and b["metin"]["tr"] == "İlmin Şerefi" for b in kit["bloklar"]), "Yer imi yokken tanınan alt başlık paragrafa döner")
 
+# Basılı içindekilerden fihrist (Klasik Mantık tipi): yer imi yok, başlıklar gövdeyle aynı puntoda, içindekiler iki sayfa
+BEKLENEN_TOC = [("ÖNSÖZ", 1), ("GİRİŞ", 1), ("BİRİNCİ BÖLÜM: KAVRAMLAR", 1), ("Kavramın Tanımı", 2),
+                ("Kavramların Birbirine Göre Durumları ve Beş Tümel Meselesi", 2), ("İKİNCİ BÖLÜM: ÖNERMELER", 1),
+                ("Önermenin Tanımı", 2), ("Karşıt Önermeler", 2), ("SONUÇ", 1), ("İçindekiler", 1)]
+for kip in ("katman", "tarama"):
+    yol = os.path.join(klasor, f"mantik_{kip}.pdf")
+    fixtur_uret.mantik_pdf(yol, kip)
+    kit = kaynak.cevir(yol)
+    bl = kit["bloklar"]
+    bas = [(b["metin"]["tr"], b["seviye"]) for b in bl if b["tur"] == "baslik"]
+    ok(K.denetle(kit) == [] and kit["kunye"].get("yapi") == "fihrist", f"İçindekiler ({kip}): yapısal denetim, kitabın fihristi")
+    ok(bas == BEKLENEN_TOC, f"İçindekiler ({kip}): başlıklar ve seviyeler {bas}")
+    sira = [b["metin"]["tr"][:20] for b in bl]
+    k_tanim = sira.index("Kavramın Tanımı")
+    ok(sira[k_tanim - 1].startswith("Konuya başka") and sira[k_tanim + 1].startswith("Şimdi asıl"),
+       f"İçindekiler ({kip}): sayfa ortasındaki başlık kendi yerinde")
+    govde_bl = bl[:[b["metin"]["tr"] for b in bl].index("İçindekiler")]
+    ok(not any(b["tur"] == "p" and b["metin"]["tr"].strip() in ("KAVRAMLAR", "BİRİNCİ BÖLÜM", "ÖNERMELER", "İKİNCİ BÖLÜM",
+                                                                  "Önermenin Tanımı", "ve Beş Tümel Meselesi")
+               for b in govde_bl), f"İçindekiler ({kip}): başlık satırları paragraf olarak tekrar etmiyor")
+    ok(any(b["tur"] == "p" and b["metin"]["tr"] == "Örnek" for b in bl), f"İçindekiler ({kip}): kalın satır başlık sanılmadı")
+    ok([s["no"] for b in bl for s in b.get("sayfalar", [])] == [str(n) for n in range(7, 15)],
+       f"İçindekiler ({kip}): basılı sayfa numaraları")
+    son = [b["metin"]["tr"] for b in bl[[b["metin"]["tr"] for b in bl].index("İçindekiler") + 1:]]
+    # taranmışta tek haneli numarayı Tesseract sürümüne göre okuyamayabilir: numarasız kabul, yanlış numara hata
+    dogru = ["ÖNSÖZ … 7", "GİRİŞ … 8", "BİRİNCİ BÖLÜM", "KAVRAMLAR … 9", "Kavramın Tanımı … 9",
+             "Kavramların Birbirine Göre Durumları ve Beş Tümel", "Meselesi … 11", "İKİNCİ BÖLÜM", "ÖNERMELER … 12",
+             "Önermenin Tanımı … 12", "Karşıt Önermeler … 13", "SONUÇ … 14"]
+    uygun = len(son) == len(dogru) and all(a == b or (kip == "tarama" and a == b.split(" … ")[0]) for a, b in zip(son, dogru))
+    ok(uygun and sum(" … " in a for a in son) >= 7, f"İçindekiler ({kip}): basılı içindekiler sonda {son}")
+_nav = _z.ZipFile(_io.BytesIO(epub.uret(kit, ["tr"]))).read("OEBPS/nav.xhtml").decode()
+ok("Bölüm 001" not in _nav and "Kavramın Tanımı" in _nav, "İçindekilerden fihrist EPUB'da numaralandırılmaz")
+# Klasik Mantık'ın gerçek biçimi: bozuk başlık, ayrı satırda numaralar, ortada numarasız bölüm başlıkları, OCR hataları
+fixtur_uret.klasik_mantik_pdf(os.path.join(klasor, "km.pdf"))
+kit = kaynak.cevir(os.path.join(klasor, "km.pdf"))
+bl = kit["bloklar"]
+bas = [(b["metin"]["tr"], b["seviye"]) for b in bl if b["tur"] == "baslik"]
+ok(K.denetle(kit) == [] and kit["kunye"].get("yapi") == "fihrist", "Klasik Mantık biçimi: içindekiler tanındı")
+ok(bas == [("Önsöz", 1), ("GİRİŞ", 1), ("I. Mantık Nedir?", 2), ("II. Tarihsel Bilgi", 2), ("BİRİNCİ BÖLÜM: KAVRAM VE TERİM", 1),
+           ("Kavramın tanımı", 2), ("Kavramın özelliği", 2), ("Önerme çeşitleri", 2), ("Yüklemli önermeler", 2),
+           ("İKİNCİ BÖLÜM: ÖNERME", 1), ("Önermenin tanımı", 2), ("Karşı olma", 2), ("Kıyas", 2), ("Kıyasın tanımı", 2),
+           ("Kıyasın çeşitleri", 2), ("Döndürme", 2), ("Tümevarım", 2), ("İçindekiler", 1)],
+   f"Klasik Mantık biçimi: başlıklar (kitabın yazımıyla), seviyeler, yanlış numara ve OCR hatası {bas}")
+govde_bl = bl[:[b["metin"]["tr"] for b in bl].index("İçindekiler")]
+ok(any(b["tur"] == "p" and b["metin"]["tr"] == "Düz döndürme:" for b in govde_bl) and
+   not any(b["tur"] == "p" and b["metin"]["tr"] in ("KAVRAM VE TERİM", "ÖNERME", "GİRİŞ") for b in govde_bl),
+   "Klasik Mantık biçimi: içindekilerde olmayan satır paragraf, başlık satırı tekrar yok")
+ok(any(b["tur"] == "p" and b["metin"]["tr"] == "Bu kısımda ele alınan meseleler üç ana başlık altında toplanır" for b in govde_bl),
+   "Klasik Mantık biçimi: başlık sanılan iki satırlık blok bölünmedi")
+ok(kaynak._toc_puan("Kıyasın tanımı", "Kıyas") == 0 and kaynak._toc_puan("il< I. Mantık Nedir?", "Mantık nedir") == 3,
+   "Eşleşme puanı: kelime sınırı ve baştaki numara")
+ok(kaynak._aralik_topla("G İ R İş") == "GİRİŞ", "Harf aralıklı başlık toplanır")
+ok(sum(1 for b in govde_bl if b["tur"] == "p" and b["metin"]["tr"] == "Düz döndürme:") == 2 and
+   not any("Kıyasm" in b["metin"]["tr"] for b in govde_bl),
+   "Klasik Mantık biçimi: 'Düz döndürme:' paragraf kaldı, OCR hatalı gövde başlığı yerine içindekilerin yazımı")
+ok(any(b["tur"] == "p" and b["metin"]["tr"] == "Bu mesele eskiden beri tartışılan bir konudur ve burada kısaca ele alınır."
+       for b in govde_bl), "Klasik Mantık biçimi: kalın başlayıp küçük harfle süren cümle tek paragraf")
+ok(kaynak._yazim_sec("KAVRAMIN ÖZELLİĞİ", "Kavramın özelliğı", 1) == "Kavramın özelliği",
+   "Büyük harfli gövde: içindekilerin düzeni, hatalı kelime gövdeden")
+ok(not kaynak._bulanik_toc("Düz döndürme:", "Döndürme") and kaynak._yazim_sec("Kıyasm tanımı :", "Kıyasın tanımı", 1) == "Kıyasın tanımı",
+   "Bulanık eşleşme kelime sayısına bakar; geçersiz kelimeli yazım seçilmez")
+ok(kaynak._icindekiler_basligi("iONDEKİ LER") and not kaynak._icindekiler_basligi("Kaynakça"), "Bozuk 'İÇİNDEKİLER' tanınır")
+ok(not kaynak._benzer_toc("BİRİNCİ BÖLÜM", "İKİNCİ BÖLÜM") and kaynak._benzer_toc("Kavramın özelliği", "Kavramın özelliğı"),
+   "Bulanık eşleşme: sıra sayısı farklıysa reddeder, harf hatasını kabul eder")
+
+# başka baskının içindekileri (numaralar metne uymuyor): kullanılmaz, eski yol
+g = [{"baslik": "Birinci Konu", "no": "40", "x0": 50}, {"baslik": "İkinci Konu", "no": "41", "x0": 50},
+     {"baslik": "Üçüncü Konu", "no": "42", "x0": 50}]
+ok(kaynak.icindekiler_fihristi(g, [None, "40", "41", "42"], [1, 2, 3], lambda i: [("p", "Başka bir metin", 11)]) is None,
+   "Metne uymayan içindekiler kullanılmaz")
+ok(kaynak.icindekiler_fihristi(g[:2], [None, "40", "41"], [1, 2], lambda i: []) is None, "İkiden az girdi: kullanılmaz")
+
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)
