@@ -15,7 +15,7 @@ from . import kitap as K
 KAYNAK = os.environ.get("KAYNAK_DIR", "/kaynak")
 UZANTILAR = (".pdf", ".epub", ".docx", ".txt")
 
-SURUM = "0.5.3"
+SURUM = "0.5.4"
 STATIK = os.path.join(os.path.dirname(__file__), "static")
 HOST = "http://host.docker.internal"
 SERVISLER = {

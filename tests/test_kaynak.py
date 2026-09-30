@@ -228,5 +228,20 @@ ok(kaynak.icindekiler_fihristi(g, [None, "40", "41", "42"], [1, 2, 3], lambda i:
    "Metne uymayan içindekiler kullanılmaz")
 ok(kaynak.icindekiler_fihristi(g[:2], [None, "40", "41"], [1, 2], lambda i: []) is None, "İkiden az girdi: kullanılmaz")
 
+# EPUB metninde kesme işareti ve tırnak kaçışlanmaz (yalnız & < >); bütün dosyalar geçerli XML
+import re, xml.dom.minidom as _md
+_k = K.yeni({"baslik": {"tr": "Aristo'nun Mantığı"}, "yazar": {"tr": "X"}, "asil_dil": "tr", "yapi": "fihrist"})
+K.blok_ekle(_k, "baslik", {"tr": "Aristo'da modal önermeler & <tırnak>"}, seviye=1)
+K.blok_ekle(_k, "p", {"tr": "Kant'a göre."})
+_zip = _z.ZipFile(_io.BytesIO(epub.uret(_k, ["tr"])))
+_dosyalar = {a: _zip.read(a).decode() for a in _zip.namelist() if a.endswith((".xhtml", ".opf"))}
+for _t in _dosyalar.values():
+    _md.parseString(_t.encode())
+_opf = next(v for a, v in _dosyalar.items() if a.endswith(".opf"))
+ok("Aristo'da modal önermeler &amp; &lt;tırnak&gt;" in _dosyalar["OEBPS/nav.xhtml"]
+   and "&#x27;" not in re.sub(r'="[^"]*"', "", "".join(_dosyalar.values()))  # metinde; öznitelik (alt) kaçışlı kalır
+   and "<dc:title>Aristo'nun Mantığı</dc:title>" in _opf,
+   "Kesme işareti kaçışlanmaz (nav, başlık, künye); & ve < kaçışlı; dosyalar geçerli XML")
+
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)

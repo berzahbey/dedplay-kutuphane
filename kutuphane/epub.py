@@ -20,6 +20,7 @@ DIL = {"ar": ("ar", "rtl", "Arapça"), "tr": ("tr", "ltr", "Türkçe"), "osm": (
 FONT_ADAY = ["/usr/share/fonts/truetype/amiri",
              os.environ.get("FONT_DIR", "/usr/share/fonts/truetype/amiri")]
 X = html.escape
+XM = lambda t: html.escape(t, quote=False)  # metin içi: yalnız & < > (Aristo'da, &#x27; değil)
 
 CSS = """@charset "utf-8";
 @font-face { font-family: "Amiri"; font-weight: normal; src: url(../fonts/Amiri-Regular.ttf); }
@@ -306,7 +307,7 @@ class _Uretici:
     def _sayfa(self, baslik, govde, govde_sinif="", ek_bas=""):
         return (f'<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n'
                 f'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"'
-                f'{_attr(self.ana)}>\n<head><meta charset="utf-8"/><title>{X(baslik)}</title>'
+                f'{_attr(self.ana)}>\n<head><meta charset="utf-8"/><title>{XM(baslik)}</title>'
                 f'<link rel="stylesheet" type="text/css" href="../css/kitap.css"/>{ek_bas}</head>\n'
                 f'<body class="{govde_sinif}">\n{govde}\n</body>\n</html>\n')
 
@@ -314,17 +315,17 @@ class _Uretici:
     def kunye_xhtml(self):
         ku = self.k["kunye"]
         asil = ku.get("asil_dil", "ar")
-        satir = [f'<p class="eser">{X(self.baslik)}</p>']
+        satir = [f'<p class="eser">{XM(self.baslik)}</p>']
         for d in self.diller + [asil]:
             b = ku["baslik"].get(d)
             if b and b != self.baslik:
-                satir.append(f"<p{_attr(d)}>{X(b)}</p>")
+                satir.append(f"<p{_attr(d)}>{XM(b)}</p>")
                 break
         yazar = ku.get("yazar", {})
         y = yazar.get(self.ana) or yazar.get("tr") or yazar.get(asil) or yazar.get("lat")
         if y and y != self.baslik:  # yazar adı eser adıyla aynıysa tekrar yazılmaz
             yd = self.ana if yazar.get(self.ana) else ("tr" if yazar.get("tr") else asil)
-            satir.append(f"<p{_attr(yd) if yazar.get(yd) == y else ''}>{X(y)}</p>")
+            satir.append(f"<p{_attr(yd) if yazar.get(yd) == y else ''}>{XM(y)}</p>")
         # künyede sadece ad ve yazar; OpenITI lisansı kaynağın yazılmasını şart koşar
         if ku.get("kaynak", {}).get("tur") == "openiti":
             satir.append(f'<div class="kucuk"{_attr("tr")}><p>Metin: OpenITI · CC BY-NC-SA 4.0</p></div>')
@@ -341,13 +342,13 @@ class _Uretici:
                 ol.append("<ol>" * (sv - seviye))
             else:
                 ol.append("</li>" + "</ol></li>" * (seviye - sv))
-            ol.append(f'<li><a href="metin/{href}">{X(etiket)}</a>')
+            ol.append(f'<li><a href="metin/{href}">{XM(etiket)}</a>')
             seviye = sv
         ol.append("</li>" + "</ol></li>" * (seviye - 1) + "</ol>")
         fihrist = "".join(ol) if self.fihrist else '<ol><li><a href="metin/kunye.xhtml">Künye</a></li></ol>'
-        sayfalar = "".join(f'<li><a href="metin/{h}">{X(e)}</a></li>' for e, h in self.sayfa_listesi)
+        sayfalar = "".join(f'<li><a href="metin/{h}">{XM(e)}</a></li>' for e, h in self.sayfa_listesi)
         ilk = self.fihrist[0][2] if self.fihrist else "kunye.xhtml"
-        govde = (f'<nav epub:type="toc" id="toc" role="doc-toc"{_attr(self.ana)}><h1>{X(self._fihrist_adi())}</h1>{fihrist}</nav>\n'
+        govde = (f'<nav epub:type="toc" id="toc" role="doc-toc"{_attr(self.ana)}><h1>{XM(self._fihrist_adi())}</h1>{fihrist}</nav>\n'
                  + (f'<nav epub:type="page-list" id="page-list" hidden="hidden"><h2>Sayfalar</h2><ol>{sayfalar}</ol></nav>\n'
                     if sayfalar else "")
                  + '<nav epub:type="landmarks" id="landmarks" hidden="hidden"><h2>Yer imleri</h2><ol>'
@@ -421,17 +422,17 @@ def uret(kit, diller, cikti_yolu=None, baslik=None, kapak_png=None):
 
     lang = _dil(u.ana)[0]
     simdi = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    meta = [f'<dc:identifier id="kimlik">{uid}</dc:identifier>', f"<dc:title>{X(u.baslik)}</dc:title>"]
+    meta = [f'<dc:identifier id="kimlik">{uid}</dc:identifier>', f"<dc:title>{XM(u.baslik)}</dc:title>"]
     for d in dict.fromkeys(diller):
         meta.append(f"<dc:language>{_dil(d)[0]}</dc:language>")
     y = yazar.get(u.ana) or yazar.get("tr") or yazar.get(ku.get("asil_dil", "ar")) or yazar.get("lat")
     if y:
-        meta.append(f"<dc:creator>{X(y)}</dc:creator>")
+        meta.append(f"<dc:creator>{XM(y)}</dc:creator>")
     kay = ku.get("kaynak", {})
     if kay.get("adres"):
-        meta.append(f"<dc:source>{X(kay['adres'])}</dc:source>")
+        meta.append(f"<dc:source>{XM(kay['adres'])}</dc:source>")
     if kay.get("lisans"):
-        meta.append(f"<dc:rights>{X(kay['lisans'])}</dc:rights>")
+        meta.append(f"<dc:rights>{XM(kay['lisans'])}</dc:rights>")
     meta.append("<dc:publisher>Dedplay Kütüphane</dc:publisher>")
     meta.append(f'<meta property="dcterms:modified">{simdi}</meta>')
     meta.append('<meta name="cover" content="kapak-resmi"/>')
