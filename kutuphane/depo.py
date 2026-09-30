@@ -126,7 +126,10 @@ def epub_uret(kid):
     for ekad, diller in surumler(kit):
         dosya = f"{ad}_{ekad}.epub"
         durum_yaz(kid, asama=f"EPUB üretiliyor: {ekad}")
-        EPUB.uret(kit, diller, os.path.join(gecici, dosya))
+        kapak = None  # kitabın kendi kapak görseli (PDF'in ilk sayfası / EPUB'un kapağı) varsa o
+        if kit["kunye"].get("kapak") and os.path.exists(os.path.join(klasor(kid), kit["kunye"]["kapak"])):
+            kapak = open(os.path.join(klasor(kid), kit["kunye"]["kapak"]), "rb").read()
+        EPUB.uret(kit, diller, os.path.join(gecici, dosya), kapak_png=kapak)
         durum_yaz(kid, asama=f"Denetleniyor: {ekad}")
         dn = epubcheck.denetle(os.path.join(gecici, dosya))
         sonuc.append({"dosya": dosya, "diller": diller, "boyut": os.path.getsize(os.path.join(gecici, dosya)),
@@ -173,7 +176,7 @@ def _dosya_ekle(kid, yol):
     """Elindeki kitap (PDF/EPUB/DOCX/TXT) -> kitap.json (Türkçe) -> Osmanlıca -> EPUB'lar."""
     if not os.path.exists(yol):
         raise FileNotFoundError("Kaynak dosya bulunamadı: " + yol)
-    kit = kaynak.cevir(yol, lambda m: durum_asama(kid, m), {"yol": yol})
+    kit = kaynak.cevir(yol, lambda m: durum_asama(kid, m), {"yol": yol}, kapak_yolu=os.path.join(klasor(kid), "kapak"))
     eski = kitap_yolu(kid)
     if os.path.exists(eski):  # yeniden işleme: önceki hâl yedeklenir, Türkçe künye düzeltmeleri korunur
         onceki = K.yukle(eski)

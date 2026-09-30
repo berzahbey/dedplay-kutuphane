@@ -268,8 +268,11 @@ class _Uretici:
                 etiket = b["metin"].get(self.ana) or next((v for v in b["metin"].values() if v), "")
                 etiket = K.NOT_ISARETI.sub("", etiket).strip()
                 if self.numarali:
-                    seviye = max(2, seviye)
-                    onceki_seviye = seviye
+                    if b["id"] == bolum_basligi:  # bölüm satırının kendisi: fihristte seviye 1
+                        seviye = onceki_seviye = 1
+                    else:
+                        seviye = max(2, seviye)
+                        onceki_seviye = seviye
                 if b["id"] != bolum_basligi:  # bölümü açan başlık bölüm satırında yazılı
                     self.fihrist.append((seviye, etiket, f"{dosya}#{hid}"))
                 ilk_baslik = ilk_baslik or etiket
@@ -328,7 +331,7 @@ class _Uretici:
         return self._sayfa("Künye", '<section class="kunye" epub:type="frontmatter">' + "".join(satir) + "</section>")
 
     def kapak_xhtml(self):
-        return self._sayfa("Kapak", '<div class="kapak" epub:type="cover"><img src="../resim/kapak.png" '
+        return self._sayfa("Kapak", f'<div class="kapak" epub:type="cover"><img src="../resim/{getattr(self, "kapak_ad", "kapak.png")}" '
                                     f'alt="{X(self.baslik)}"/></div>', govde_sinif="kapak")
 
     def nav_xhtml(self):
@@ -397,7 +400,10 @@ def uret(kit, diller, cikti_yolu=None, baslik=None, kapak_png=None):
         asil = ku.get("asil_dil", "ar")
         alt = ku["baslik"].get(asil) if ku["baslik"].get(asil) != u.baslik else ""
         kapak_png = KAPAK.uret(u.baslik, yazar.get(u.ana) or yazar.get("tr") or yazar.get(asil, ""), alt=alt or "")
-    dosyalar.append(("OEBPS/resim/kapak.png", kapak_png, "image/png", "kapak-resmi", "cover-image"))
+    kapak_ad = "kapak.jpg" if kapak_png[:2] == b"\xff\xd8" else "kapak.png"  # kitabın kendi kapağı JPEG olabilir
+    u.kapak_ad = kapak_ad
+    dosyalar.append((f"OEBPS/resim/{kapak_ad}", kapak_png, "image/jpeg" if kapak_ad.endswith("jpg") else "image/png",
+                     "kapak-resmi", "cover-image"))
     dosyalar.append(("OEBPS/css/kitap.css", CSS if u.arap_harfli else re.sub(r"@font-face[^}]*}\n", "", CSS),
                      "text/css", "css", None))
     if u.arap_harfli:

@@ -75,5 +75,15 @@ ok(len(epub.bolum_yapisi(kit3, "tr")) == 1, "Bölüm başlığı silinince böl�
 nav = zipfile.ZipFile(io.BytesIO(epub.uret(kit3, ["tr"]))).read("OEBPS/nav.xhtml").decode()
 ok("BİRİNCİ BÖLÜM" not in nav, "Silinen başlık fihristte yok")
 
+# bölümü açan başlıktan sonra seviyesi 3 olan alt başlık: fihrist listesi bozulmamalı (Fârâbî kitabındaki hata)
+kit4 = ornek()
+K.blok_ekle(kit4, "baslik", {"tr": "Derin Alt Başlık", "osm": "درین"}, seviye=3)
+K.blok_ekle(kit4, "p", {"tr": "Metin.", "osm": "متن"})
+kit4["bloklar"] = [kit4["bloklar"][0], kit4["bloklar"][-2], kit4["bloklar"][-1]] + kit4["bloklar"][1:-2]
+yol4 = os.path.join(gecici, "seviye.epub"); epub.uret(kit4, ["tr"], yol4)
+if epubcheck.var_mi():
+    d = epubcheck.denetle(yol4)
+    ok(d["hata"] == 0 and d["uyari"] == 0, f"Bölüm başlığından sonra derin alt başlık: fihrist geçerli {d['mesajlar'][:1]}")
+
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)

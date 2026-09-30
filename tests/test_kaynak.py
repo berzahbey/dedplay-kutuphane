@@ -19,26 +19,30 @@ def ok(kosul, ad):
 
 klasor = tempfile.mkdtemp()
 fixtur_uret.hepsini_uret(klasor)
-BEKLENEN_FIHRIST = ["ÖNSÖZ", "BİRİNCİ BÖLÜM", "İlmin Şerefi", "İKİNCİ BÖLÜM", "Kelâmın Önemi", "SONUÇ"]
+BEKLENEN_FIHRIST = ["ÖNSÖZ", "BİRİNCİ BÖLÜM", "İlmin Şerefi", "İKİNCİ BÖLÜM", "Kelâmın Önemi", "SONUÇ", "İçindekiler"]
 for tur in ("katman", "tarama", "bozuk"):
     kit = kaynak.cevir(os.path.join(klasor, f"deneme_{tur}.pdf"))
     bl = kit["bloklar"]
     ok(K.denetle(kit) == [], f"PDF {tur}: yapısal denetim")
     ok([b["metin"]["tr"] for b in bl if b["tur"] == "baslik"] == BEKLENEN_FIHRIST, f"PDF {tur}: fihrist")
-    ok([b["seviye"] for b in bl if b["tur"] == "baslik"] == [1, 1, 2, 1, 2, 1], f"PDF {tur}: başlık seviyeleri")
+    ok([b["seviye"] for b in bl if b["tur"] == "baslik"] == [1, 1, 2, 1, 2, 1, 1], f"PDF {tur}: başlık seviyeleri")
     ok([s["no"] for b in bl for s in b.get("sayfalar", [])] == ["5", "6", "7", "8", "9", "10"], f"PDF {tur}: basılı sayfa numaraları")
     s8 = next((b, s) for b in bl for s in b.get("sayfalar", []) if s["no"] == "8")
     ok(s8[0]["metin"]["tr"][s8[1]["konum"]["tr"]:].startswith("zorunlu"), f"PDF {tur}: sayfa geçişinde bölünen kelime birleşti")
     ok(len(kit["dipnotlar"]) == 2 and all("sahiptir.{{" in b["metin"]["tr"] for b in bl if "{{" in b["metin"]["tr"]),
        f"PDF {tur}: iki dipnot doğru yere bağlı")
     ok(kit["kunye"]["baslik"]["tr"] == "İtikadda Orta Yol", f"PDF {tur}: eser adı kapaktan")
-    ok(not any("ISBN" in b["metin"]["tr"] or "İÇİNDEKİLER" in b["metin"]["tr"] for b in bl), f"PDF {tur}: künye ve içindekiler atıldı")
+    ic = next(k for k, b in enumerate(bl) if b["metin"]["tr"] == "İçindekiler")
+    ok(not any("ISBN" in b["metin"]["tr"] for b in bl) and ic > len(bl) - 8
+       and (tur != "katman" or (len(bl) - ic - 1 >= 3 and any("BÖLÜM" in b["metin"]["tr"] for b in bl[ic:])))
+       and sum(1 for b in bl if "İÇİNDEKİLER" in b["metin"]["tr"].upper().replace("I", "İ")) == 1,
+       f"PDF {tur}: künye atıldı, basılı içindekiler kitabın sonunda (tek başlık)")
     ok(kit["kunye"]["cikarma"]["bozuk_katman"] == (tur == "bozuk"), f"PDF {tur}: bozuk katman tespiti")
 
 kit = kaynak.cevir(os.path.join(klasor, "Erzurumlu Ibrahim Hakki - Marifetname.epub"))
 bl = kit["bloklar"]
 ok(K.denetle(kit) == [] and len(kit["dipnotlar"]) == 2, "EPUB: iki dipnot bağlı")
-ok([b["metin"]["tr"] for b in bl if b["tur"] == "baslik"] == ["Mukaddime", "Birinci Bâb", "Birinci Fasıl"], "EPUB: içindekiler ve Notlar atıldı, başlıklar")
+ok([b["metin"]["tr"] for b in bl if b["tur"] == "baslik"] == ["Mukaddime", "Birinci Bâb", "Birinci Fasıl", "İçindekiler"], "EPUB: Notlar atıldı, başlıklar, içindekiler sonda")
 ok(bl[1]["metin"]["tr"].startswith("Hamd") and [s["no"] for b in bl for s in b.get("sayfalar", [])] == ["3", "5", "6"], "EPUB: ilk paragraf ve sayfa işaretleri")
 ok(kit["kunye"]["baslik"]["tr"] == "Mârifetnâme" and kit["kunye"]["yazar"]["tr"] == "Erzurumlu İbrahim Hakkı", "EPUB: künye")
 kit = kaynak.cevir(os.path.join(klasor, "deneme.docx"))
@@ -125,9 +129,11 @@ bl = kit["bloklar"]
 ok(kit["kunye"].get("yapi") == "fihrist" and K.denetle(kit) == [], "EPUB fihristi: kitabın kendi fihristi kullanıldı")
 ok([(b["metin"]["tr"], b["seviye"]) for b in bl if b["tur"] == "baslik"] == [
     ("MEDENİYETLERİN DEFTER-İ AMALİ: ANSİKLOPEDİLER", 1), ("I-BATIDA ANSİKLOPEDİ", 1), ("BİR TÜRÜN TARİH ÖNCESİ", 2),
-    ("BELGELER TEORİSİ.", 2), ("II — İSLÂM’DA ANSİKLOPEDİ", 1), ("İSLÂMIN KOZMOLOJİK DOKTRİNLERİ", 2), ("DOĞU KÜTÜPHANESİ", 1)],
+    ("BELGELER TEORİSİ.", 2), ("II — İSLÂM’DA ANSİKLOPEDİ", 1), ("İSLÂMIN KOZMOLOJİK DOKTRİNLERİ", 2), ("DOĞU KÜTÜPHANESİ", 1),
+    ("İçindekiler", 1)],
    "EPUB fihristi: başlıklar, seviyeler ve temiz yazılar (Roma rakamı korunur)")
-ok(not any(x in b["metin"]["tr"] for b in bl for x in ("CEMİL MERİÇ", "PINAR", "İçindekiler")), "EPUB fihristi: ön sayfalar atıldı")
+ok(not any(x in b["metin"]["tr"] for b in bl for x in ("CEMİL MERİÇ", "PINAR")) and bl[0]["metin"]["tr"].startswith("MEDENİYETLERİN")
+   and [b["metin"]["tr"] for b in bl if b["tur"] == "baslik"][-1] == "İçindekiler", "EPUB fihristi: ön sayfalar atıldı, içindekiler sonda")
 ok(any(b["metin"]["tr"].startswith("Doğu kütüphanesi hakkında") for b in bl), "EPUB fihristi: başlığa benzeyen paragraf kaybolmadı")
 ok(any("Nasır’ın {{n0001}} tezini" in b["metin"]["tr"] for b in bl) and len(kit["dipnotlar"]) == 1, "Kesme işareti boşluğu ve ( 2 ) dipnotu")
 import zipfile as _z, io as _io
@@ -146,8 +152,8 @@ _d.save(os.path.join(klasor, "yi2.pdf"))
 kit = kaynak.cevir(os.path.join(klasor, "yi2.pdf"))
 bas = [(b["metin"]["tr"], b["seviye"]) for b in kit["bloklar"] if b["tur"] == "baslik"]
 ok(kit["kunye"].get("yapi") == "fihrist" and K.denetle(kit) == [], "PDF yer imleri kullanıldı")
-ok([x[0] for x in bas] == ["Önsöz", "Birinci Bölüm: İlmin Şerefi", "Şüphe ve İlim", "İKİNCİ BÖLÜM", "Kelâmın Önemi", "SONUÇ"]
-   and [x[1] for x in bas] == [1, 1, 2, 1, 2, 1], f"PDF yer imleri: başlıklar ve seviyeler {bas}")
+ok([x[0] for x in bas] == ["Önsöz", "Birinci Bölüm: İlmin Şerefi", "Şüphe ve İlim", "İKİNCİ BÖLÜM", "Kelâmın Önemi", "SONUÇ", "İçindekiler"]
+   and [x[1] for x in bas] == [1, 1, 2, 1, 2, 1, 1], f"PDF yer imleri: başlıklar ve seviyeler {bas}")
 ok(not any(b["tur"] == "baslik" and b["metin"]["tr"] == "İlmin Şerefi" for b in kit["bloklar"]), "Yer imi yokken tanınan alt başlık paragrafa döner")
 
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")

@@ -48,11 +48,22 @@ def _rakam(s):
 
 
 # ======================= PDF: satırlar =======================
+_TR_PARCA = re.compile(r"\s*[a-zA-Zçğıöşüâîû]{0,2}[ıİğĞşŞçÇöÖüÜ][a-zA-Zçğıöşüâîû]{0,2}\s*")
+
+
 def _katman_satirlari(page):
     rows = []
-    for b in page.get_text("dict").get("blocks", []):
+    bloklar = page.get_text("dict").get("blocks", [])
+    # metin sütununun sağ kenarı (uzun satırların ortancası): bunun dışındaki "(17)" parçaları kenar numarasıdır
+    uzun = sorted(ln["bbox"][2] for b in bloklar for ln in b.get("lines", [])
+                  if len("".join(s.get("text", "") for s in ln.get("spans", []))) > 40)
+    sag_kenar = uzun[len(uzun) // 2] if len(uzun) >= 5 else None
+    for b in bloklar:
         for ln in b.get("lines", []):
             spans = [s for s in ln.get("spans", []) if s.get("text", "").strip()]
+            if sag_kenar:
+                spans = [s for s in spans if not (s["bbox"][0] >= sag_kenar + 2 and
+                                                  re.fullmatch(r"\s*\(?\s*\d{1,4}\s*\)?\s*", s["text"]))]
             if not spans:
                 continue
             boy = [s["size"] for s in spans if any(c.isalpha() for c in s["text"])]
@@ -60,6 +71,9 @@ def _katman_satirlari(page):
             parca = []
             for k, s in enumerate(spans):
                 t = s["text"]
+                if k > 0 and _TR_PARCA.fullmatch(t) and h and s["size"] < h * 0.92:
+                    parca.append(t.lstrip())  # OCR katmanı: ı/ğ/ş ayrı yazı tipinde, önüne boşluk konmuş
+                    continue
                 ust = (s.get("flags", 0) & 1) or (h and s["size"] < h * 0.78)
                 if k > 0 and ust and re.fullmatch(r"\s*[\d٠-٩]{1,3}\s*", t):
                     parca.append("\ue000" + _rakam(t.strip()) + "\ue001")
@@ -179,6 +193,7 @@ def pdf_sayfalari(yol, ilerleme=None):
                 sayfalar[i] = (rows, w, h, True)
                 if ilerleme:
                     ilerleme(f"OCR: sayfa {k + 1}/{len(ocr)}")
+    bilgi["kapak_resmi"] = _pdf_kapak(doc)
     meta = doc.metadata or {}
     try:  # PDF yer imleri (bookmarks): [[seviye, başlık, sayfa(1'den)], ...]
         bilgi["yer_imleri"] = [(int(a), TS.norm(b), int(c)) for a, b, c in doc.get_toc(simple=True) if (b or "").strip() and 1 <= int(c) <= n]
@@ -187,6 +202,39 @@ def pdf_sayfalari(yol, ilerleme=None):
     bilgi["baslik"] = (meta.get("title") or "").strip()
     bilgi["yazar"] = (meta.get("author") or "").strip()
     return sayfalar, bilgi
+
+
+def _pdf_kapak(doc):
+    """Kitabın kendi kapağı: ilk 3 sayfadan ilk dolu (boş/düz renk olmayan) sayfanın görüntüsü (JPEG)."""
+    try:
+        from PIL import Image, ImageStat
+        for i in range(min(3, len(doc))):
+            page = doc[i]
+            pix = page.get_pixmap(dpi=max(72, int(72 * 1600 / max(page.rect.height, 1))))
+            img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+            if max(ImageStat.Stat(img.convert("L")).stddev) < 8:
+                continue  # boş ya da düz renk sayfa
+            b = io.BytesIO()
+            img.save(b, "JPEG", quality=85, optimize=True)
+            return (b.getvalue(), "image/jpeg")
+    except Exception:
+        pass
+    return None
+
+
+def _icindekiler_basligi(t):
+    """'İÇİNDEKİLER', 'İçindekiler:', 'FİHRİST' (büyük İ'nin küçültülmesindeki birleşik nokta dahil)."""
+    t = "".join(c for c in unicodedata.normalize("NFKD", t.strip(" .:")) if not unicodedata.combining(c))
+    return t.lower().replace("ı", "i") in ("icindekiler", "fihrist", "contents", "table of contents")
+
+
+def _icindekiler_sayfasi(rows):
+    """Basılı içindekiler sayfası mı: başlığında İçindekiler/Fihrist ya da satırlarının çoğu sayfa numarasıyla bitiyor."""
+    if not rows:
+        return False
+    if any(TS.ICINDEKILER.search(r["text"]) and len(r["text"]) < 40 for r in rows[:4]):
+        return True
+    return len(rows) >= 6 and sum(1 for r in rows if TS.NOKTALI.search(r["text"])) >= 0.6 * len(rows)
 
 
 # ======================= PDF: sayfa düzeyinde ayıklama =======================
@@ -286,8 +334,49 @@ def _baslik_mi(r, govde, genislik, kalin_oran):
         and r["h"] >= govde * 1.1
 
 
+_KENAR_BAS = re.compile(r"^\((\d{1,3})\)\s+(?=\S)")
+_KENAR_SON = re.compile(r"(?<=\S)\s+\((\d{1,3})\)\s*$")
+_KENAR_TEK = re.compile(r"^\s*\((\d{1,3})\)\s*$")  # tek başına satır: "(9)"
+
+
+def _kenar_numarasi_dizisi(sayfa_satirlari):
+    """OCR katmanı kenar numarasını (aslın sayfa numarası gibi) satırın başına/sonuna yazmışsa ayıklar: "millet- (17)",
+    "(18) edilebilen". Güvenlik: satır sınırındaki numaralar kitap boyunca düzenli artan bir dizi oluşturmalı."""
+    bulunan = []
+    for rows in sayfa_satirlari:
+        for r in rows:
+            m = _KENAR_TEK.search(r["text"]) or _KENAR_BAS.search(r["text"]) or _KENAR_SON.search(r["text"])
+            if m:
+                bulunan.append(int(m.group(1)))
+    if len(bulunan) < 8:
+        return sayfa_satirlari
+    artan = sum(1 for a, b in zip(bulunan, bulunan[1:]) if 0 < b - a <= 3)
+    if artan < 0.7 * (len(bulunan) - 1):
+        return sayfa_satirlari  # düzenli dizi değil: metnin kendi numaraları olabilir, dokunulmaz
+    for rows in sayfa_satirlari:
+        for r in rows:
+            yeni = "" if _KENAR_TEK.search(r["text"]) else _KENAR_SON.sub("", _KENAR_BAS.sub("", r["text"]))
+            if yeni != r["text"]:
+                r["text"] = yeni
+                r["n"] = len(yeni.split())
+    return [[r for r in rows if r["text"].strip()] for rows in sayfa_satirlari]
+
+
+def _kenar_numaralari_at(rows):
+    """Metin sütununun dışında (sağ ya da sol kenarda) duran "(17)", "17" gibi numaralar: kenar notu (ör. aslın sayfa
+    numarası); metne karışmasın."""
+    govde = [r for r in rows if r["n"] >= 4]
+    if len(govde) < 3:
+        return rows
+    sol = min(r["x0"] for r in govde)
+    sag = max(r["x1"] for r in govde)
+    return [r for r in rows if not (re.fullmatch(r"\(?\s*\d{1,4}\s*\)?", r["text"].strip()) and
+                                    (r["x0"] >= sag - 2 or r["x1"] <= sol + 2))]
+
+
 def _sayfa_paragraflari(rows, genislik, govde, kalin_oran):
     """Bir sayfanın ana satırları -> [(tür, metin, boy)] (tür 'b' başlık ya da 'p')."""
+    rows = _kenar_numaralari_at(rows)
     if not rows:
         return []
     govde_satir = [r for r in rows if abs(r["h"] - govde) < govde * 0.15]
@@ -400,6 +489,7 @@ def pdf_oku(yol, ilerleme=None):
         nolar.append(no)
         satirlar.append(kalan)
     nolar = _eksik_numaralari_doldur(nolar)
+    satirlar = _kenar_numarasi_dizisi(satirlar)
     bilgi["kapak_baslik"] = _kapak_basligi(satirlar[:3])
     dolu = next((rows for rows in satirlar[:3] if any(_harf(r["text"]) >= 3 for r in rows)), [])
     bilgi["kapak_satirlari"] = [(r["text"], r["h"], r["top"]) for r in sorted(dolu, key=lambda r: r["top"])
@@ -407,6 +497,10 @@ def pdf_oku(yol, ilerleme=None):
     # ön ve son sayfalar (kapak, künye, içindekiler): Stüdyo'nun kuralı
     tut = TS.on_ve_son_sayfalari_at([[str(i)] + [r["text"] for r in satirlar[i]] for i in range(n)])
     kalan = [int(s[0]) for s in tut]
+    # basılı içindekiler sayfaları (başta, sonda ya da önsözden sonra): metinden çıkar, kitabın sonuna eklenir
+    toc_sayfalari = [i for i in range(n) if (i < max(20, n // 5) or i >= n - 15) and _icindekiler_sayfasi(satirlar[i])]
+    if toc_sayfalari:  # içindekiler sayfalarının arasına/devamına düşen numaralı satır sayfaları da
+        kalan = [i for i in kalan if i not in toc_sayfalari]
     satirlar_k = _tekrar_edenleri_at([satirlar[i] for i in kalan])
     govde_k, govde_o = _govde_boyu(satirlar_k, False), _govde_boyu(satirlar_k, True)
     govde = govde_k or govde_o or 11
@@ -416,7 +510,11 @@ def pdf_oku(yol, ilerleme=None):
     son_not = None
     # PDF'in kendi yer imleri varsa başlıklar oradan (bizim başlık tanımamız devre dışı)
     imler = collections.defaultdict(list)
-    for sv, bas, sy in bilgi.get("yer_imleri") or []:
+    tum_imler = bilgi.get("yer_imleri") or []
+    anlamli = [x for x in tum_imler if not re.fullmatch(r"(page|sayfa|pg|p|s)?\.?\s*\d{1,4}|[ivxlcdm]{1,6}", x[1].strip(), re.I)]
+    if len(anlamli) < 0.5 * len(tum_imler):
+        anlamli = []  # yer imlerinin çoğu "Page 1, Page 2…": tarama programının koyduğu, fihrist değil
+    for sv, bas, sy in anlamli:
         if sy - 1 in set(kalan):
             imler[sy - 1].append((min(sv, 3), bas))
     yer_imi_modu = sum(len(v) for v in imler.values()) >= 3
@@ -454,6 +552,10 @@ def pdf_oku(yol, ilerleme=None):
             metin = UST.sub(bagla, metin)
             if tur == "p" and sayfa_notu:  # okunamamış üst simge: kelimeye yapışık rakam, noktadan sonra "!"
                 metin = YAPISIK.sub(bagla, metin)
+                # OCR katmanı üst simgeyi normal boyda yazmış: "edilmesine 74 niyet" (sayfada 74 numaralı dipnot varsa)
+                metin = re.sub(r"(?:(?<=[^\W\d_])|(?<=[^\W\d_][,;:])) (\d{1,3})(?= [^\W\d_])",
+                               lambda m: (" " + bagla(m)) if int(m.group(1)) in sayfa_notu and
+                               sayfa_notu[int(m.group(1))] not in baglanan else m.group(0), metin)
                 if sayfalar[i][3] and len(sayfa_notu) - len(baglanan) == 1:
                     metin = _okunamayan_ust_simge(metin, sayfa_notu, baglanan)
             elif tur == "p":
@@ -491,19 +593,21 @@ def pdf_oku(yol, ilerleme=None):
             ilk = k == 0
             onceki = ogeler[-1] if ogeler else None
             # sayfa geçişinde bölünen paragraf: öncekiyle birleştir
-            if ilk and tur == "p" and onceki and onceki["tur"] == "p" and metin[:1].islower() \
-                    and not onceki["metin"].endswith(END_PUNCT):
-                sol = onceki["metin"]
+            kuyruk_m = re.search(r"((?:\{\{n\d{4,}\}\})+)$", onceki["metin"]) if onceki else None
+            if ilk and tur == "p" and onceki and onceki["tur"] == "p" and metin[:1].islower() and not onceki.get("koru") \
+                    and not onceki["metin"][:kuyruk_m.start() if kuyruk_m else None].endswith(END_PUNCT):
+                kuyruk = kuyruk_m.group(1) if kuyruk_m else ""
+                sol = onceki["metin"][:kuyruk_m.start()] if kuyruk_m else onceki["metin"]
                 if sol.endswith(("-", "‐")):
                     kel_sol = re.search(r"([^\W\d_]+)[-‐]$", sol)
                     kel_sag = re.match(r"([^\W\d_]+)", metin)
                     if kel_sol and kel_sag:
                         birlesik = DZ._birlesik(kel_sol.group(1), kel_sag.group(1)) or (kel_sol.group(1) + kel_sag.group(1))
-                        onceki["metin"] = sol[:kel_sol.start()] + etiket + birlesik + metin[kel_sag.end():]
+                        onceki["metin"] = sol[:kel_sol.start()] + etiket + birlesik + kuyruk + metin[kel_sag.end():]
                     else:
-                        onceki["metin"] = sol[:-1] + etiket + metin
+                        onceki["metin"] = sol[:-1] + etiket + metin + kuyruk
                 else:
-                    onceki["metin"] = sol + " " + etiket + metin
+                    onceki["metin"] = sol + kuyruk + " " + etiket + metin
                 continue
             if k in meta_b:  # yer iminden başlık: metni yer imindeki yazı
                 sv, bas = meta_b[k]
@@ -515,6 +619,13 @@ def pdf_oku(yol, ilerleme=None):
             pass  # boş sayfa: numarası atlanır
         if ilerleme and j % 20 == 0:
             ilerleme(f"Sayfa yapısı: {j + 1}/{len(kalan)}")
+    if toc_sayfalari:  # basılı içindekiler: kitabın sonunda, olduğu gibi (satır satır)
+        ogeler.append({"tur": "baslik", "metin": "İçindekiler", "boy": 0, "seviye": 1, "koru": True})
+        for i in toc_sayfalari:
+            for r in satirlar[i]:
+                t = re.sub(r"\s*(?:\.{2,}|…{2,})[^\s\d]{0,15}\s*(?=\d+\s*$)", " … ", r["text"].strip())  # "BÖLÜM.....u 6" -> "BÖLÜM … 6"
+                if t and not _icindekiler_basligi(t) and not TS.PAGE_NUM.match(t):
+                    ogeler.append({"tur": "p", "metin": t, "boy": 0, "koru": True})
     bilgi["govde_boyu"] = govde
     return ogeler, notlar, bilgi
 
@@ -617,6 +728,14 @@ def epub_oku(yol, ilerleme=None):
         return TS.norm("".join(out))
 
     ilk_belge = fihrist["ilk_belge"] if fihrist else 0
+    toc_satirlari = []  # baştaki basılı içindekiler sayfası: kitabın sonuna
+    for ad, soup in belgeler[:ilk_belge]:
+        govde = soup.body or soup
+        bl = [b for b in govde.find_all(_BLOK) if not b.find(_BLOK) and b.get_text(strip=True)]
+        if bl and (any(TS.ICINDEKILER.search(b.get_text(" ", strip=True)) for b in bl[:3]) or
+                   sum(1 for b in bl if b.find("a", href=True)) >= 0.5 * len(bl)):
+            toc_satirlari += [TS.norm(b.get_text(" ", strip=True)) for b in bl
+                              if not _icindekiler_basligi(b.get_text(" ", strip=True))]
     son_seviye = 1  # fihristteki son başlığın seviyesi (fihristte olmayan gerçek başlık etiketi bunun altına)
     for sira, (ad, soup) in enumerate(belgeler):
         if sira < ilk_belge:
@@ -652,10 +771,32 @@ def epub_oku(yol, ilerleme=None):
     else:
         ogeler = [o for i, o in enumerate(ogeler) if not (o["tur"] == "baslik" and not o.get("fihrist") and
                                                          _NOT_BASLIK.match(o["metin"]))]
+    if toc_satirlari:
+        ogeler.append({"tur": "baslik", "metin": "İçindekiler", "boy": 0, "seviye": 1, "koru": True})
+        ogeler += [{"tur": "p", "metin": t, "boy": 0, "koru": True} for t in toc_satirlari if t]
     bilgi = {"baslik": (book.get_metadata("DC", "title") or [[""]])[0][0],
              "yazar": (book.get_metadata("DC", "creator") or [[""]])[0][0], "ocr": 0, "bozuk_katman": False,
-             "yapi": "fihrist" if fihrist else None}
+             "yapi": "fihrist" if fihrist else None, "kapak_resmi": _epub_kapak(book)}
     return ogeler, notlar, bilgi
+
+
+def _epub_kapak(book):
+    """EPUB'un kendi kapak resmi: (bayt, tür) ya da None."""
+    from ebooklib import ITEM_COVER, ITEM_IMAGE
+    kapak_id = None
+    for _, ozellik in book.get_metadata("OPF", "cover") or []:
+        kapak_id = (ozellik or {}).get("content") or kapak_id
+    adaylar = []
+    for it in book.get_items():
+        tur = getattr(it, "media_type", "") or ""
+        if not tur.startswith("image/"):
+            continue
+        ad = (it.get_id() or "") + " " + (it.get_name() or "")
+        if it.get_type() == ITEM_COVER or it.get_id() == kapak_id:
+            return (it.get_content(), tur)
+        if "cover" in ad.lower() or "kapak" in ad.lower():
+            adaylar.append(it)
+    return (adaylar[0].get_content(), adaylar[0].media_type) if adaylar else None
 
 
 def _sikistir(t):
@@ -802,7 +943,7 @@ def _basliklari_denetle(ogeler):
     out = []
     for k, o in enumerate(ogeler):
         sonraki = ogeler[k + 1] if k + 1 < len(ogeler) else None
-        if o.get("fihrist"):  # kitabın kendi fihristinden: olduğu gibi
+        if o.get("fihrist") or o.get("koru"):  # kitabın kendi fihristinden / basılı içindekiler: olduğu gibi
             out.append(o)
             continue
         if o["tur"] == "baslik" and sonraki and sonraki["tur"] == "p" and \
@@ -832,9 +973,16 @@ def _kalip_baslik(t):
 
 
 def _seviyeler(ogeler):
+    _seviyeler_ic(ogeler)
+    for o in ogeler:
+        if o.get("koru") and o["tur"] == "baslik":
+            o["seviye"] = 1
+
+
+def _seviyeler_ic(ogeler):
     if any(o.get("fihrist") for o in ogeler):
         for o in ogeler:  # kitabın kendi fihristi: seviyeler oradan; fihristte olmayan başlık paragraf olur
-            if o["tur"] == "baslik" and not o.get("fihrist"):
+            if o["tur"] == "baslik" and not o.get("fihrist") and not o.get("koru"):
                 o["tur"] = "p"
         return
     _seviyeler_boy(ogeler)
@@ -907,6 +1055,7 @@ def _duzelt(metinler):
             p = DZ.bolunmus_kelimeleri_birlestir(p)
         p = re.sub(r"(?<=[^\W\d_])\s+([’'])\s*(?=[^\W\d_])", r"\1", p)  # Nasır ’ ın -> Nasır’ın
         p = re.sub(r"\(\s*(\{\{n\d{4,}\}\})\s*\)", r"\1", p)         # ( {{n0002}} ) -> {{n0002}}
+        p = re.sub(r"\s*\(\s*\)", "", p)                                  # silinen numaradan kalan "()"
         p = DZ.harfleri_onar(p)
         p = re.sub(r"[ \t]{2,}", " ", p).replace(" ,", ",").replace(" .", ".").strip()
         p = re.sub(r"^(\d{1,3}[.)])(?=[^\s\d.)\ue002])", r"\1 ", p)
@@ -954,7 +1103,7 @@ def kitaba_cevir(ogeler, notlar, kunye):
     for o, metin in zip(ogeler, duz):
         temiz, sayfalar = _konumlar(metin)
         yazi = K.NOT_ISARETI.sub("", temiz).strip()
-        if o["tur"] == "p" and not K.NOT_ISARETI.search(temiz) and (not yazi or DZ.cop_paragraf_mi(yazi)):
+        if o["tur"] == "p" and not o.get("koru") and not K.NOT_ISARETI.search(temiz) and (not yazi or DZ.cop_paragraf_mi(yazi)):
             tasinan += [e for e, _ in sayfalar]
             continue
         sayfa = [{"no": e, "konum": {"tr": 0}} for e in tasinan] + [{"no": e, "konum": {"tr": k}} for e, k in sayfalar]
@@ -1043,6 +1192,11 @@ def _kunye_sec(bilgi, ad_baslik, ad_yazar, dosya_koku):
     meta_b = bilgi.get("baslik") if _anlamli(bilgi.get("baslik")) else ""
     meta_y = bilgi.get("yazar") if _anlamli(bilgi.get("yazar")) else ""
     satirlar = bilgi.get("kapak_satirlari") or ([(bilgi["kapak_baslik"], 1, 0)] if bilgi.get("kapak_baslik") else [])
+    if not ad_baslik.isascii():  # dosya adında Türkçe harfler var: kullanıcının verdiği düzgün ad, en güvenilir kaynak
+        ek = r"(nin|nın|nun|nün|in|ın|un|ün|a|e|ya|ye|da|de|ta|te|dan|den|tan|ten|la|le|yla|yle|ı|i|u|ü|yı|yi|yu|yü)"
+        duzgun = lambda t: re.sub(r"(?<=[^\W\d_])-(?=" + ek + r"\b)", "’", re.sub(r"\s+([)\]])", r"\1", t)).strip()
+        yazar = meta_y if meta_y and not kopya(meta_y) else turkcelestir(ad_yazar)
+        return duzgun(ad_baslik), duzgun(yazar)
     kapak = _kapak_sec(satirlar, ad_baslik if ad_yazar else "")  # dosya adı "Yazar - Eser" değilse karşılaştırılamaz
     if kapak:
         baslik = turkce_baslik(kapak)
@@ -1180,8 +1334,8 @@ def _anlamli(s):
     return s and not re.search(r"microsoft|word|untitled|adsız|\.docx?|\.pdf|^[\d\W]+$", s, re.I) and len(s) < 150
 
 
-def cevir(yol, ilerleme=None, kaynak_bilgi=None):
-    """Dosya -> kitap.json sözlüğü (Türkçe)."""
+def cevir(yol, ilerleme=None, kaynak_bilgi=None, kapak_yolu=None):
+    """Dosya -> kitap.json sözlüğü (Türkçe). kapak_yolu verilirse kitabın kendi kapak görseli oraya (uzantısıyla) yazılır."""
     uzanti = os.path.splitext(yol)[1].lower()
     okuyucu = {".pdf": pdf_oku, ".epub": epub_oku, ".docx": docx_oku, ".txt": txt_oku}.get(uzanti)
     if not okuyucu:
@@ -1201,6 +1355,12 @@ def cevir(yol, ilerleme=None, kaynak_bilgi=None):
         "yapi": bilgi.get("yapi"),  # "fihrist": başlıklar kitabın kendi fihristinden (EPUB) ya da yer imlerinden (PDF)
     }
     kit = kitaba_cevir(ogeler, notlar, kunye)
+    if kapak_yolu and bilgi.get("kapak_resmi"):
+        veri, tur = bilgi["kapak_resmi"]
+        uz = ".png" if "png" in tur else ".jpg"
+        with open(kapak_yolu + uz, "wb") as f:
+            f.write(veri)
+        kit["kunye"]["kapak"] = os.path.basename(kapak_yolu + uz)
     if not any(b["tur"] == "p" for b in kit["bloklar"]):
         raise ValueError("Dosyadan metin çıkarılamadı (boş ya da okunamayan dosya)")
     return kit
