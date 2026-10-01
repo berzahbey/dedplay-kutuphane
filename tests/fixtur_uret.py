@@ -478,3 +478,39 @@ def cift_sayfa_pdf(yol, kip="katman"):
         yeni = out.new_page(width=p.rect.width, height=p.rect.height)
         yeni.insert_image(yeni.rect, stream=p.get_pixmap(dpi=300).tobytes("png"))
     out.save(yol)
+
+
+# ---- Parantezli dipnot (Abidler Yolu): atıf metinde "(2)" normal boyda; dipnot sayfa altında "(2) İnsan Sûresi,
+# Âyet: 22", metinle aynı punto, küçük boşluk ve kısa ayırma çizgisi. 2. sayfanın altında numaralı madde var, dipnot değil.
+PARANTEZ_DIPNOT = ["Zümer Sûresi, Âyet: 22", "İnsan Sûresi, Âyet: 22"]
+
+
+def parantez_dipnot_pdf(yol):
+    doc = fitz.open()
+    metin1 = ("Allah'ın öbür dünyada akla hayâle gelmeyen bu nimetleri siz iyi kullarına bir mükâfattır. İyi amelleriniz "
+              "kaybolmaz. (1) Şimdi ibâdeti ele alıp başından âbidlerin gayesi olan sonuna kadar üzerinde şöyle bir "
+              "düşünelim. Görürüz ki o çetin ve yokuşlu bir yoldur. Kimin gönlüne İslâmı açmışsa o Rabbi tarafından bir "
+              "nur üzere olmaz mı? (2) Bu yol cennet yoludur, zahmetli ve güç şeylerle örtülmüştür.")
+    metin2 = ("İbâdet yolu böyle zor olmakla beraber üstelik insan da zayıf bir yaratıktır. Hayat zordur ve dinî "
+              "vecibeler tekrar tekrar edilmektedir. Bu yolda yürüyen kimse için şunlar gereklidir:")
+    maddeler = ["(1) Şeytanla savaşmak ve ona uymamak,", "(2) Daima kötülüğe meyyal olan nefsi dizginlemek."]
+    for n, (metin, alt) in enumerate(((metin1, None), (metin2, maddeler))):
+        p = doc.new_page(width=W, height=H)
+        p.insert_font(fontname="F", fontfile=SERIF)
+        p.insert_text((W / 2 - 4, 30), str(n + 5), fontname="F", fontsize=9)
+        y = UST + 10
+        for j, sat in enumerate(satirlar(metin, SERIF, GOVDE, SAG - SOL - 18)):
+            p.insert_text((SOL + (18 if j == 0 else 0), y), sat, fontname="F", fontsize=GOVDE)
+            y += GOVDE * 1.45
+        if alt:  # sayfanın altına denk gelen numaralı maddeler (metinde "(1)" atfı yok): dipnot değil
+            y = H - 80
+            for m in alt:
+                p.insert_text((SOL + 18, y), m, fontname="F", fontsize=GOVDE)
+                y += GOVDE * 1.45
+        else:
+            p.draw_line((SOL, H - 62), (SOL + 70, H - 62), width=0.5)
+            y = H - 48
+            for k, d in enumerate(PARANTEZ_DIPNOT, 1):
+                p.insert_text((SOL, y), f"({k}) {d}", fontname="F", fontsize=GOVDE)
+                y += GOVDE * 1.45
+    doc.save(yol)

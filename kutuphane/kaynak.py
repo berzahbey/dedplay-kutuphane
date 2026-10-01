@@ -18,6 +18,7 @@ import unicodedata
 from concurrent.futures import ProcessPoolExecutor
 
 from . import kitap as K
+from . import zeyrek_onarim  # noqa: F401  zeyrek'in kök kümesini bozan hatası (DZ'den önce yüklenmeli)
 
 try:  # Stüdyo'nun kodu (imajda /app/app)
     from app import duzelt as DZ
@@ -181,7 +182,7 @@ def _ocr_satirlari(d, olcek, ayar=""):
                     continue  # (içindekiler okumasında nokta dizisi korunur)
                 else:
                     parca.append((" " if parca else "") + t)
-            metin = TS.norm("".join(parca))
+            metin = TS.norm(re.sub(r"(?:^|\s)[|¦]+(?=\s|$)", "", "".join(parca)).strip())  # "|": kalem çizgisi
             if metin:
                 rows.append({"text": metin, "h": lh * olcek, "top": min(w[3] for w in ws) * olcek,
                              "bot": max(w[3] + w[2] for w in ws) * olcek, "x0": ws[0][0] * olcek,
@@ -557,7 +558,29 @@ def _dipnot_ayir(rows, h, govde):
         a, b = rows[k - 1], rows[k]
         if b["top"] > h * 0.45 and b["top"] - a["bot"] > govde * 2.5 and re.match(r"^\d{1,3}[\s.)]", b["text"]):
             return rows[:k], rows[k:]
+    # "(2) İnsan Sûresi, Âyet: 22": parantezli numara, metinle aynı punto, boşluk küçük (ayırma çizgisi). Şart: aynı
+    # numara sayfanın metninde atıf olarak geçmeli ("…bolmaz. (2)"); sayfa altındaki numaralı madde dipnot sanılmasın
+    for k in range(1, len(rows)):
+        a, b = rows[k - 1], rows[k]
+        m = _NOT_BASI.match(b["text"])
+        if m and b["top"] > h * 0.55 and b["top"] - a["bot"] > govde * 0.8 and \
+                _atif_var(" ".join(r["text"] for r in rows[:k]), m.group(1)):
+            return rows[:k], rows[k:]
     return rows, []
+
+
+_NOT_BASI = re.compile(r"^\s*[(\[]\s?(\d{1,3})\s?[)\]]\s*\S")
+
+
+_BENZER_ATIF = re.compile(r"(?<=[^\s(\[])\s?[(\[]\s?([IİlıiL|!Oo]{1,2})\s?[)\]]")  # OCR: "(1)" -> "(İİ)"
+
+
+def _atif_var(metin, no):
+    """Metinde "(no)" atıf olarak (bir kelimenin ya da noktalamanın ardından) geçiyor mu. Rakam OCR'da harfe dönmüş
+    olabilir ("(İİ)"): metinde tek bir rakama benzeyen parantezli işaret varsa o da sayılır."""
+    if re.search(r"[^\s(\[]\s?[(\[]\s?" + re.escape(str(no)) + r"\s?[)\]]", metin):
+        return True
+    return len(_BENZER_ATIF.findall(metin)) == 1
 
 
 _SAHTE_UST = re.compile(r"(?<=[^\W\d_][.,;:])\s?[!|?'’”\"°](?=\s|$)")
@@ -596,11 +619,11 @@ def _notlari_bol(dip_paras):
     out = []
     for p in dip_paras:
         p = UST.sub(r"\1 ", p)
-        for parca in re.split(r"\s(?=\d{1,3}[\s.)]+[^\W\d])", p):
+        for parca in re.split(r"\s(?=\d{1,3}[\s.)]+[^\W\d])|\s(?=[(\[]\d{1,3}[)\]]\s*[^\W\d])", p):
             parca = parca.strip()
             if not parca:
                 continue
-            m = re.match(r"^(\d{1,3})[\s.)]+(.*)$", parca, re.S)
+            m = re.match(r"^(\d{1,3})[\s.)]+(.*)$", parca, re.S) or re.match(r"^[(\[](\d{1,3})[)\]]\s*(.*)$", parca, re.S)
             if m:
                 out.append((int(m.group(1)), m.group(2).strip()))
             elif out:
@@ -1236,12 +1259,19 @@ def pdf_oku(yol, ilerleme=None):
             metin = UST.sub(bagla, metin)
             if tur == "p" and sayfa_notu:  # okunamamış üst simge: kelimeye yapışık rakam, noktadan sonra "!"
                 metin = YAPISIK.sub(bagla, metin)
+                # parantezli atıf "…bolmaz. (2)" (bir kelimenin/noktalamanın ardından; paragraf başındaki madde no değil)
+                metin = re.sub(r"(?<=[^\s(\[])\s?[(\[]\s?(\d{1,3})\s?[)\]]",
+                               lambda m: bagla(m) if int(m.group(1)) in sayfa_notu and
+                               sayfa_notu[int(m.group(1))] not in baglanan else m.group(0), metin)
                 # OCR katmanı üst simgeyi normal boyda yazmış: "edilmesine 74 niyet" (sayfada 74 numaralı dipnot varsa)
                 metin = re.sub(r"(?:(?<=[^\W\d_])|(?<=[^\W\d_][,;:])) (\d{1,3})(?= [^\W\d_])",
                                lambda m: (" " + bagla(m)) if int(m.group(1)) in sayfa_notu and
                                sayfa_notu[int(m.group(1))] not in baglanan else m.group(0), metin)
                 if sayfalar[i][3] and len(sayfa_notu) - len(baglanan) == 1:
                     metin = _okunamayan_ust_simge(metin, sayfa_notu, baglanan)
+                bos = [n for n, g_ in sayfa_notu.items() if g_ not in baglanan]
+                if len(bos) == 1 and len(_BENZER_ATIF.findall(metin)) == 1:  # OCR: "(1)" -> "(İİ)"; tek aday, tek not
+                    metin = _BENZER_ATIF.sub(lambda m: bagla(re.match(r"(\d+)", str(bos[0]))), metin)
             elif tur == "p":
                 metin = YAPISIK.sub("", metin)
             if tur == "p" and sayfalar[i][3]:  # bağlanamayan sahipsiz son işaret: sil
@@ -1348,8 +1378,92 @@ def pdf_oku(yol, ilerleme=None):
                     t = _toc_temiz(_TOC_NOKTALI.match(t).group("t"))
                 if t and not _icindekiler_basligi(t) and not TS.PAGE_NUM.match(t):
                     ogeler.append({"tur": "p", "metin": t, "boy": 0, "koru": True})
+    if not yer_imi_modu:
+        _sahte_basliklari_ayikla(ogeler)
+    _kopuk_paragraflari_birlestir(ogeler)
+    if not yer_imi_modu and _bolum_iskeleti(ogeler):  # içindekiler/yer imi yok, metinde "… Bölüm" başlıkları var
+        bilgi["yapi"] = "fihrist"
+        bilgi["fihrist_kaynagi"] = "bolum_basliklari"
     bilgi["govde_boyu"] = govde
     return ogeler, notlar, bilgi
+
+
+def _sahte_basliklari_ayikla(ogeler):
+    """Yazı boyu tahmininin başlık sandığı paragraf parçaları ve tarama lekeleri: küçük harfle başlayan ("rılmıştır.",
+    "dür.»" — paragrafın son satırı), 3'ten az harfli ("HI", "BH") ya da "|" ile biten satır başlık değildir; paragraf
+    olur (ardından kopuk paragraf birleştirme onu cümlesine geri ekler)."""
+    for k, o in enumerate(ogeler):
+        if o["tur"] != "baslik" or o.get("koru") or o.get("fihrist"):
+            continue
+        t = SAYFA_ISARET.sub("", o["metin"]).strip()
+        if re.match(r"[a-zçğıöşüâîû]", t) or _harf(t) < 3 or t.endswith("|"):
+            ogeler[k] = dict(o, tur="p")
+
+
+def _kopuk_paragraflari_birlestir(ogeler):
+    """Cümlesi yarıda kalan paragrafın devamı ayrı paragraf olmuş (kalın ayet meali satır satır, sayfa geçişi, araya
+    giren dipnot): önceki paragraf cümle sonu işaretiyle bitmiyorsa ve sonraki küçük harfle başlıyorsa birleşir
+    ("…bu ni'met-" + "leri, siz iyi…"). Satır içinde kalan tire ("kay- bolmaz") sonraki temizlikte birleşir.
+    Liste maddeleri ("b) …", "0) …") ve korunan (sona taşınan içindekiler) satırlar birleşmez."""
+    yeni = []
+    for o in ogeler:
+        p = yeni[-1] if yeni else None
+        if p and o["tur"] == "p" and p["tur"] == "p" and not o.get("koru") and not p.get("koru"):
+            once = re.sub(r"\{\{n\d+\}\}|[\ue000-\ue003]", "", SAYFA_ISARET.sub("", p["metin"])).rstrip()
+            sonra = SAYFA_ISARET.sub("", o["metin"]).lstrip()
+            if once and not once.endswith(END_PUNCT) and re.match(r"[a-zçğıöşüâîû]", sonra) and \
+                    not re.match(r"[a-zçğıöşü][)\].]\s", sonra) and not re.match(r"^\(?[a-zçğıöşü\d][)\].]\s", once):
+                yeni[-1] = dict(p, metin=p["metin"].rstrip() + " " + o["metin"].lstrip())
+                continue
+        yeni.append(o)
+    ogeler[:] = yeni
+
+
+_BOLUM_ON = re.compile(r"^(birinci|ikinci|üçüncü|dördüncü|beşinci|altıncı|yedinci|sekizinci|dokuzuncu|onuncu|"
+                       r"on\s?birinci|on\s?ikinci|\d{1,2}\.?|[ivxlc]{1,6}\.?)\s+(bölüm|kısım|fasıl|bab|kitap|makale)\b")
+_ANA_BASLIK = re.compile(r"^(önsöz|ön söz|giriş|mukaddime|takdim|sunuş|başlarken|sonuç|son söz|hâtime|hatime|"
+                         r"netice|bibliyografya|kaynakça|kaynaklar)\b[.:]?$")
+
+
+def _bolum_iskeleti(ogeler):
+    """Basılı içindekiler ve yer imi yoksa fihrist iskeleti metindeki bölüm başlıklarından: "Birinci Bölüm …"
+    (ve Önsöz, Giriş, Mukaddime, Sonuç gibi) başlıklar seviye 1, öteki başlıklar seviye 2. İki nokta, ünlem ya da soru
+    işaretiyle biten satır ("Hazret-i … buyurur:", "Tarsın!") başlık değildir. Bölüm satırının hemen ardından gelen başlık
+    ("İKİNCİ BÖLÜM" + "TEVBE") onunla birleşir. En az iki bölüm başlığı yoksa hiçbir şey yapılmaz."""
+    temiz = lambda o: SAYFA_ISARET.sub("", o["metin"]).strip()
+    bas = [o for o in ogeler if o["tur"] == "baslik" and not o.get("koru")]
+    if sum(1 for o in bas if _BOLUM_ON.match(_tr_kucuk(temiz(o)))) < 2:
+        return False
+    yeni, onceki_bolum = [], None
+    for o in ogeler:
+        if o["tur"] != "baslik" or o.get("koru"):
+            yeni.append(o)
+            onceki_bolum = None
+            continue
+        t = temiz(o)
+        kucuk = _tr_kucuk(t)
+        if t.endswith((":", "!", "?")) or len(t.split()) > 14 or not _harf(t):
+            yeni.append(dict(o, tur="p"))  # konuşma/alıntı girişi, başlık değil
+            onceki_bolum = None
+            continue
+        if _BOLUM_ON.match(kucuk) or _ANA_BASLIK.match(kucuk):
+            o = dict(o, seviye=1, fihrist=True, onar=True)
+            yeni.append(o)
+            onceki_bolum = o if _BOLUM_ON.match(kucuk) and len(t.split()) <= 3 else None
+            continue
+        harfler = [c for c in t if c.isalpha()]
+        if len(harfler) < 4 or sum(c.isupper() for c in harfler) < 0.8 * len(harfler):
+            yeni.append(dict(o, tur="p"))  # alt başlık değil (karışık harfli cümle, tarama lekesi)
+            onceki_bolum = None
+            continue
+        if onceki_bolum is not None:  # "İKİNCİ BÖLÜM" + "TEVBE" -> "İKİNCİ BÖLÜM: TEVBE"
+            onceki_bolum["metin"] = onceki_bolum["metin"].rstrip(" .:") + ": " + t
+            onceki_bolum = None
+            continue
+        yeni.append(dict(o, seviye=2, fihrist=True, onar=True))
+    ogeler[:] = yeni
+    _kopuk_paragraflari_birlestir(ogeler)  # paragrafa dönen parçalar cümlesine
+    return True
 
 
 # ======================= EPUB / DOCX / TXT =======================
@@ -1904,6 +2018,20 @@ def _benzer(a, b):
     return bool(ka and kb) and len(ka & kb) / min(len(ka), len(kb)) >= 0.5
 
 
+_PROGRAM_ADI = re.compile(
+    r"design|adobe|acrobat|microsoft|office|word|writer|windows|abbyy|finereader|scan|tarayıcı|epson|canon|\bhp\b|"
+    r"printer|bullzip|pdf|corel|quark|indesign|calibre|\buser\b|admin|owner|kullanıcı|bilgisayar|\bpc\b|www|\.com|"
+    r"unknown|bilinmiyor|anonymous|construction|default|untitled", re.I)
+
+
+def _kisi_adi_mi(t):
+    """PDF/EPUB bilgi alanındaki yazar bir insan adına benziyor mu ("Construction.design", "Microsoft Word - …",
+    "Administrator" gibi program/bilgisayar adları değil)."""
+    t = (t or "").strip()
+    return bool(t) and not re.search(r"[.@/\\\d_]|https?:", t.replace(". ", " ").rstrip(".")) and \
+        len(t.split()) <= 6 and not _PROGRAM_ADI.search(t)
+
+
 def _kunye_sec(bilgi, ad_baslik, ad_yazar, dosya_koku):
     """Eser adı: kapaktaki başlık (Türkçe harfleriyle; dosya adıyla uyuşuyorsa) > PDF/EPUB bilgi alanı (dosya adının
     kopyası değilse) > dosya adı. Yazar: bilgi alanı (eser adıyla aynı değilse) > dosya adındaki 'Yazar - Eser'."""
@@ -1912,7 +2040,7 @@ def _kunye_sec(bilgi, ad_baslik, ad_yazar, dosya_koku):
     # Türkçe harfleriyle daha doğru yazılmıştır) tercih edilir
     kopya = lambda s: bool(ad_yazar) and sade(s) == sade(ad_yazar + " " + ad_baslik)
     meta_b = bilgi.get("baslik") if _anlamli(bilgi.get("baslik")) else ""
-    meta_y = bilgi.get("yazar") if _anlamli(bilgi.get("yazar")) else ""
+    meta_y = bilgi.get("yazar") if _anlamli(bilgi.get("yazar")) and _kisi_adi_mi(bilgi.get("yazar")) else ""
     satirlar = bilgi.get("kapak_satirlari") or ([(bilgi["kapak_baslik"], 1, 0)] if bilgi.get("kapak_baslik") else [])
     if not ad_baslik.isascii():  # dosya adında Türkçe harfler var: kullanıcının verdiği düzgün ad, en güvenilir kaynak
         ek = r"(nin|nın|nun|nün|in|ın|un|ün|a|e|ya|ye|da|de|ta|te|dan|den|tan|ten|la|le|yla|yle|ı|i|u|ü|yı|yi|yu|yü)"

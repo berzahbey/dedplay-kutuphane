@@ -309,5 +309,67 @@ for _n in range(12):
 _rows = kaynak._katman_satirlari(_d[0])
 ok(kaynak._cilt_arasi(_rows, 700, 400) is None, "Tek sütunlu yatay sayfa bölünmez")
 
+# zeyrek 0.1.3: "olmak" çözümlenince "ol-" kökü bozuluyordu ("olanlar" geçersiz sayılıyordu); düzeltme sırayı önemsizleştirir
+kaynak.DZ.gecerli_mi("olmak")
+kaynak.DZ._gecerli_onbellek.clear()
+ok(all(kaynak.DZ.gecerli_mi(k) for k in ("olanlar", "olacak", "olacaktır", "yapılacak", "bulacak", "olmak")),
+   "Zemberek: 'olmak' çözümlendikten sonra 'olanlar, olacak, yapılacak' hâlâ geçerli")
+
+# Parantezli dipnot (Abidler Yolu): "(2)" atfı ve sayfa altında aynı puntoda "(2) … Sûresi"; numaralı madde dipnot değil
+fixtur_uret.parantez_dipnot_pdf(os.path.join(klasor, "parantez_dipnot.pdf"))
+_kit = kaynak.cevir(os.path.join(klasor, "parantez_dipnot.pdf"))
+_t = " ".join(b["metin"]["tr"] for b in _kit["bloklar"] if b["tur"] == "p")
+ok([d["metin"]["tr"] for d in _kit["dipnotlar"].values()] == fixtur_uret.PARANTEZ_DIPNOT and
+   re.search(r"kaybolmaz\.\{\{n0001\}\}", _t) and re.search(r"olmaz mı\?\{\{n0002\}\}", _t),
+   "Parantezli dipnot ayrılır ve metindeki atfına bağlanır")
+ok("(1) Şeytanla savaşmak" in _t and "(2) Daima kötülüğe" in _t,
+   "Sayfa altındaki numaralı madde (metinde atfı yok) dipnot sanılmaz")
+ok(kaynak._atif_var("ibâdet edin. (İİ)", 1) and not kaynak._atif_var("(1) Şeytanla savaşmak", 1),
+   "Atıf: OCR'ın harfe çevirdiği '(İİ)' tanınır, satır başındaki madde numarası atıf sayılmaz")
+
+# Yazar: PDF bilgi alanındaki program/bilgisayar adı ("Construction.design") yerine dosya adındaki yazar
+ok(kaynak._kunye_sec({"yazar": "Construction.design", "baslik": "?? ??? ????????"}, "Abidler Yolu", "Imam Gazali",
+                     "Imam Gazali - Abidler Yolu") == ("Abidler Yolu", "İmam Gazali")
+   and kaynak._kisi_adi_mi("Prof. Dr. Necati ÖNER") and not kaynak._kisi_adi_mi("Microsoft Word - kitap.doc"),
+   "Yazar: program adı reddedilir, insan adı kabul edilir")
+
+# İçindekiler/yer imi yoksa fihrist iskeleti metindeki "… Bölüm" başlıklarından
+_og = []
+for _b in ["MUKADDİME", "GİRİŞ", "BİRİNCİ BÖLÜM İLİM", "İKİNCİ BÖLÜM", "TEVBE", "ENGELLER", "Hazret-i Siner buyurur:",
+           "ÜÇÜNCÜ BÖLÜM", "Tarsın!", "GÖZ VE KORUNMASI"]:
+    _og.append({"tur": "baslik", "metin": _b, "boy": 12})
+    if _b != "İKİNCİ BÖLÜM":
+        _og.append({"tur": "p", "metin": "Metin.", "boy": 10})
+ok(kaynak._bolum_iskeleti(_og) and [(o["metin"], o["seviye"]) for o in _og if o["tur"] == "baslik"] == [
+    ("MUKADDİME", 1), ("GİRİŞ", 1), ("BİRİNCİ BÖLÜM İLİM", 1), ("İKİNCİ BÖLÜM: TEVBE", 1), ("ENGELLER", 2),
+    ("ÜÇÜNCÜ BÖLÜM", 1), ("GÖZ VE KORUNMASI", 2)] and not kaynak._bolum_iskeleti([{"tur": "baslik", "metin": "GİRİŞ"}]),
+   "Bölüm başlıklarından fihrist; ':' ve '!' ile biten satır başlık değil; bölümsüz kitaba dokunulmaz")
+
+# Sahte başlıklar (paragrafın son satırı, tarama lekesi, "|" kalem çizgisi) paragraf olur; iskelette alt başlık büyük harfli
+_og = [{"tur": "p", "metin": "Bu cümle ayrı-"}, {"tur": "baslik", "metin": "rılmıştır."}, {"tur": "baslik", "metin": "BH"},
+       {"tur": "baslik", "metin": "runda değilsin. |"}, {"tur": "baslik", "metin": "BİRİNCİ BÖLÜM"},
+       {"tur": "p", "metin": "Metin."}, {"tur": "baslik", "metin": "TAKVA ise dinde gâyet itiyatlı olma durumudur."},
+       {"tur": "baslik", "metin": "RİYÂ"}, {"tur": "p", "metin": "Metin."}, {"tur": "baslik", "metin": "İKİNCİ BÖLÜM"},
+       {"tur": "p", "metin": "Metin."}]
+kaynak._sahte_basliklari_ayikla(_og)
+kaynak._kopuk_paragraflari_birlestir(_og)
+kaynak._bolum_iskeleti(_og)
+ok([(o["metin"], o.get("seviye")) for o in _og if o["tur"] == "baslik"] == [("BİRİNCİ BÖLÜM", 1), ("RİYÂ", 2),
+                                                                           ("İKİNCİ BÖLÜM", 1)]
+   and _og[0]["metin"] == "Bu cümle ayrı- rılmıştır.",
+   "Sahte başlıklar paragraf olur ve cümlesine döner; iskelette alt başlık büyük harfli")
+ok(kaynak._ocr_satirlari({"text": ["yüz", "çevirmelisin.", "|"], "block_num": [1] * 3, "par_num": [1] * 3,
+                          "line_num": [1] * 3, "left": [10, 60, 220], "width": [40, 120, 6], "top": [10] * 3,
+                          "height": [30] * 3}, 1)[0]["text"] == "yüz çevirmelisin.", "OCR: tek başına '|' silinir")
+
+# Cümlesi yarıda kalan paragrafın devamı (küçük harfle başlayan) birleşir; liste maddeleri birleşmez
+_og = [{"tur": "p", "metin": "akla hayâle gelmeyen bu ni'met-"}, {"tur": "p", "metin": "leri, siz iyi kullarına."},
+       {"tur": "p", "metin": "Şunlar gereklidir:"}, {"tur": "p", "metin": "a) Hor zaman için unutmamak,"},
+       {"tur": "p", "metin": "b) İnsanlara iştirak etmemek."}]
+kaynak._kopuk_paragraflari_birlestir(_og)
+ok([o["metin"] for o in _og] == ["akla hayâle gelmeyen bu ni'met- leri, siz iyi kullarına.", "Şunlar gereklidir:",
+                                 "a) Hor zaman için unutmamak,", "b) İnsanlara iştirak etmemek."],
+   "Kopuk paragraf birleşir, liste maddeleri ayrı kalır")
+
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)
