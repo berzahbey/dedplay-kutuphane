@@ -1,0 +1,103 @@
+# =============================================================================
+#  DEDPLAY KÜTÜPHANE — ZimaOS'A ELLE KURULUM
+#  Kitapları (PDF / EPUB / DOCX / TXT ve OpenITI) temizleyip fihristli EPUB'a dönüştürür; Türkçe olmayanları
+#  Translate ile çevirir, Osmanlıcaya aktarır, okuma ekranında düzeltilir ve Stüdyo'ya seslendirmeye gönderilir.
+#  + işlemci ayarı servisi: ZimaOS'un koyduğu 1 çekirdek sınırını otomatik kaldırır (OCR için gerekli).
+#
+#  Gerekenler: Dedplay Stüdyo stack'i kurulu olmalı (Translate 8060, Osmanlıca 8089, Stüdyo 8070, Ollama).
+#  Kütüphane onlara sunucunun kendisi üzerinden (portlarla) ulaşır.
+#  Kütüphane verisi (kitaplar, okuma ekranı düzeltmeleri) /DATA/AppData/dedplay-studyo/kutuphane/ altında durur;
+#  yeniden kurulumda kaybolmaz.
+#
+#  ZimaOS: Uygulama Mağazası → Özel Kurulum (Custom Install) → İçe aktar → bu dosyanın içeriğini yapıştır.
+#  Yapıştırmadan önce SADECE aşağıdaki iki klasörü kontrol et.
+# =============================================================================
+
+x-klasorler:
+  # ▼▼▼ DEĞİŞTİRİLEBİLİR 1: KİTAP KLASÖRÜ ▼▼▼
+  # "Ekle → Sunucudan seç" bölümünde bu klasör görünür. Kütüphane bu klasöre hiçbir şey yazmaz, sadece okur.
+  kitap: &kitap /media/ZimaOS-HD/Kitap
+
+  # ▼▼▼ DEĞİŞTİRİLEBİLİR 2: EPUB ÇIKTI KLASÖRÜ ▼▼▼
+  # Hazır EPUB'lar dile göre alt klasörlere kaydedilir: Türkçe/, Osmanlıca/, Türkçe-Osmanlıca/, Arapça/ ...
+  cikti: &cikti /media/ZimaOS-HD/Media/Kitaplar
+
+# ▼ Bundan sonrasına dokunmana gerek yok ▼
+
+name: dedplay-kutuphane
+services:
+
+  kutuphane:
+    image: berzahbey/dedplay-kutuphane:latest
+    container_name: dedplay-kutuphane
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    restart: unless-stopped
+    ports:
+      - "8075:8000"
+    environment:
+      TRANSLATE_URL: http://host.docker.internal:8060
+      OSMANLICA_URL: http://host.docker.internal:8089
+      STUDYO_URL: http://host.docker.internal:8070
+      CEVIRI_MODEL: gemma3:27b      # Türkçe çeviri modeli (Translate üzerinden, Ollama'da kurulu olmalı)
+      OTOMATIK_CEVIRI: "1"          # Türkçe olmayan kitap eklenince çeviri kendiliğinden başlar ("0": elle)
+    volumes:
+      - type: bind
+        source: /DATA/AppData/dedplay-studyo/kutuphane
+        target: /data
+        bind:
+          create_host_path: true
+      - type: bind
+        source: *kitap
+        target: /kaynak
+        read_only: true
+      - type: bind
+        source: *cikti
+        target: /cikti
+        bind:
+          create_host_path: true
+    x-casaos:
+      volumes:
+        - container: /kaynak
+          description:
+            en_us: "Kitap klasörü: eklenecek kitapların bulunduğu klasör (sadece okunur)."
+        - container: /cikti
+          description:
+            en_us: "EPUB çıktı klasörü: hazır EPUB'lar dile göre alt klasörlere kaydedilir."
+        - container: /data
+          description:
+            en_us: "Kütüphane verileri (kitaplar, düzeltmeler). Değiştirme."
+
+  # ---------------- İşlemci ayarı: ZimaOS'un 1 çekirdek sınırını kaldırır ----------------
+  islemci-ayari:
+    image: docker:cli
+    container_name: dedplay-kutuphane-islemci
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    # Betik kodlanmış (base64) olarak duruyor: içinde dolar işareti geçmediği için ZimaOS ve Docker Compose onu
+    # bozamaz. Çözülmüş hâli: dakikada bir dedplay-kutuphane konteynerinin işlemci sınırına bakar, sunucunun çekirdek
+    # sayısından azsa (nproc) en yükseğe çıkarır.
+    entrypoint: ["/bin/sh", "-c", "echo Tj0kKG5wcm9jKTsgZWNobyAiU3VudWN1ZGEgJE4gacWfIHBhcsOnYWPEscSfxLEgdmFyIgp3aGlsZSB0cnVlOyBkbwogIGZvciBjIGluIGRlZHBsYXkta3V0dXBoYW5lOyBkbwogICAgY3VyPSQoZG9ja2VyIGluc3BlY3QgLWYgJ3t7Lkhvc3RDb25maWcuTmFub0NwdXN9fScgJGMgMj4vZGV2L251bGwpIHx8IGNvbnRpbnVlCiAgICBpZiBbICIkY3VyIiAhPSAiMCIgXSAmJiBbICIkY3VyIiAtbHQgIiQoKE4gKiAxMDAwMDAwMDAwKSkiIF07IHRoZW4KICAgICAgZG9ja2VyIHVwZGF0ZSAtLWNwdXMgIiROIiAiJGMiID4vZGV2L251bGwgJiYgZWNobyAiJGM6IGnFn2xlbWNpIHPEsW7EsXLEsSAkTiDDp2VraXJkZcSfZSDDp8Sxa2FyxLFsZMSxIgogICAgZmkKICBkb25lCiAgc2xlZXAgNjAKZG9uZQo= | base64 -d | sh"]
+
+x-casaos:
+  architectures: [amd64]
+  main: kutuphane
+  author: berzahbey
+  developer: berzahbey
+  category: Utilities
+  index: /
+  port_map: "8075"
+  scheme: http
+  icon: https://raw.githubusercontent.com/berzahbey/dedplay-studyo/main/icon.png
+  title:
+    en_us: Dedplay Kütüphane
+  tagline:
+    en_us: Kitabı temizle, fihristli EPUB'a dönüştür, çevir, Osmanlıcaya aktar
+  description:
+    en_us: >-
+      Dedplay Kütüphane PDF (metin katmanlı ya da taranmış), EPUB, DOCX ve TXT kitapları ve OpenITI kataloğundaki
+      Arapça eserleri temizler; sayfa ve dipnot numaralarını ayıklar, basılı içindekilerden fihrist çıkarır ve
+      fihristli EPUB 3 üretir. Türkçe olmayan kitaplar Translate ile Türkçeye çevrilir, Osmanlıcaya aktarılır;
+      okuma ekranında düzeltilen kitap Stüdyo'ya seslendirmeye gönderilir.

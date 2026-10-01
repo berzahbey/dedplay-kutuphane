@@ -10,6 +10,13 @@ Dedplay ailesinin parçası: metin çıkarma Stüdyo'dan, çeviri Translate'ten,
   sağdan sola Osmanlıca/Arapça (Amiri gömülü). Her EPUB W3C epubcheck ile denetlenir.
 - Port: 8075. Veri: `/DATA/AppData/dedplay-studyo/kutuphane`.
 
+Kurulum (ZimaOS):
+- `docker-compose.zimaos.yml`: Uygulama Mağazası → Özel Kurulum (Custom Install) → İçe aktar → dosyanın içeriğini
+  yapıştır. Önce dosyanın başındaki iki klasörü (kitap klasörü, EPUB çıktı klasörü) kontrol et. Dedplay Stüdyo
+  stack'i kurulu olmalı (Translate, Osmanlıca, Stüdyo, Ollama). Dosyadaki işlemci ayarı servisi ZimaOS'un 1 çekirdek
+  sınırını kendiliğinden kaldırır.
+- `docker-compose.yml`: komut satırından kurulum (`docker compose -p dedplay-kutuphane up -d`).
+
 Sürümler:
 - 0.1: OpenITI'de Türkçe yazımla arama, ekleme, Arapça EPUB, künye düzenleme.
 - 0.2: Elindeki kitaplar (PDF, EPUB, DOCX, TXT; sunucu arşivinden ya da bilgisayardan). Bozuk metin katmanı
