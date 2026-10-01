@@ -89,7 +89,34 @@ def _katman_satirlari(page):
             x0, y0, x1, y1 = ln["bbox"]
             rows.append({"text": metin, "h": h, "top": y0, "bot": y1, "x0": x0, "x1": x1,
                          "n": len(metin.split()), "kalin": kalin, "blok": b.get("number", 0), "ocr": False})
-    return rows
+    return _satir_parcalarini_birlestir(rows)
+
+
+def _satir_parcalarini_birlestir(rows):
+    """Eski OCR katmanı bir satırı aynı yükseklikte iki-üç ayrı satır olarak kaydetmiş olabilir ("…toplumdaki yeri,
+    onların" + "İslâm toplumundaki yerini"); ayrı kalırsa paragraf cümle ortasında bölünür. Birleşme şartı: dikeyde en
+    az %60 örtüşme, yakın yükseklik (dipnot işareti / içindekiler numarası karışmasın), aradaki boşluk en çok 2,5 harf
+    yüksekliği (çift sayfa arası ve içindekilerin sağdaki numarası birleşmesin)."""
+    if len(rows) < 2:
+        return rows
+    out = []
+    for r in sorted(rows, key=lambda r: (round((r["top"] + r["bot"]) / 2), r["x0"])):
+        es = None
+        for o in reversed(out[-6:]):
+            ust, alt = max(o["top"], r["top"]), min(o["bot"], r["bot"])
+            yuk = min(o["bot"] - o["top"], r["bot"] - r["top"])
+            hmax, hmin = max(o["h"], r["h"]), min(o["h"], r["h"]) or 1
+            if yuk > 0 and alt - ust >= 0.6 * yuk and hmax / hmin <= 1.33 and -2 <= r["x0"] - o["x1"] <= 2.5 * hmax:
+                es = o
+                break
+        if es is None:
+            out.append(dict(r))
+            continue
+        es["text"] = TS.norm(es["text"] + " " + r["text"])
+        es["x1"], es["top"], es["bot"] = max(es["x1"], r["x1"]), min(es["top"], r["top"]), max(es["bot"], r["bot"])
+        es["n"] = len(es["text"].split())
+        es["kalin"] = es["kalin"] and r["kalin"]
+    return sorted(out, key=lambda r: (r["blok"], r["top"])) if len(out) < len(rows) else rows
 
 
 def _ocr_sayfa(args):

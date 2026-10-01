@@ -364,3 +364,44 @@ def klasik_mantik_pdf(yol):
                     p.insert_text((SOL + (18 if j == 0 else 0), y), sat, fontname="F", fontsize=GOVDE); y += GOVDE * 1.45
                 y += 2
     tmp.save(yol)
+
+
+# ---- Eski OCR katmanı: bir satır aynı yükseklikte iki (üç) ayrı satır olarak kaydedilmiş (Watt, Felsefenin Temel
+# İlkeleri). Parçalar arasında 7-12 puntoluk boşluk var; birleşmezse paragraf cümle ortasında bölünür.
+PARCALI_METIN = [
+    ("Bu araştırmanın temel görüşlerinden biri, insanların farkında olsunlar veya olmasınlar fikirlerinin sosyal "
+     "gerçekleri yansıtmasıdır. Eflatun da bu problem hakkında görüş belirtmiş ve Cumhuriyet adlı eserinde ferdin "
+     "yetenekleriyle toplumun yapısı arasındaki benzerliğe önem vermiştir. Filozofların Bizansa ait toplumdaki yeri, "
+     "onların İslâm toplumundaki yerini tesbit etmede önemsiz de olsa bir faktördü."),
+    ("İslâm felsefî düşüncesinin sosyal sonuçlarını incelerken Kindî'den daha genç olmasına rağmen Râzî ile başlamak "
+     "uygun olur. O, diğer büyük filozoflardan daha az etkilenerek onlardan bir dereceye kadar ayrılır."),
+    ("Fakat bana bir konu öğret veya Mekke'ye gitmeye bana eşlik eder misin diyene, ne doğru söyledin ne de yanlış "
+     "söyledin denilebilir. Önermenin anlamı budur ve onu bölümler halinde açıklayacağız."),
+]
+
+
+def parcali_pdf(yol):
+    """Her paragrafın bazı satırları iki-üç parça halinde (aralarında 7-12 pt boşluk) yazılır."""
+    doc = fitz.open()
+    p = doc.new_page(width=W, height=H)
+    p.insert_font(fontname="F", fontfile=SERIF)
+    y, bol = UST, 0
+    for metin in PARCALI_METIN:
+        for j, sat in enumerate(satirlar(metin, SERIF, GOVDE, SAG - SOL - 18)):
+            x = SOL + (18 if j == 0 else 0)
+            kel = sat.split(" ")
+            bol += 1
+            if bol % 2 == 0 and len(kel) > 4:  # her ikinci satır parçalı; bazıları üç parça
+                kesim = [len(kel) // 2] if bol % 4 else [len(kel) // 3, 2 * len(kel) // 3]
+                parcalar, onceki = [], 0
+                for k in kesim + [len(kel)]:
+                    parcalar.append(" ".join(kel[onceki:k]))
+                    onceki = k
+                for n, parca in enumerate(parcalar):
+                    p.insert_text((x, y), parca, fontname="F", fontsize=GOVDE)
+                    x += font_w(parca, SERIF, GOVDE) + 8 + 2 * n  # boşluk: 8-10 pt
+            else:
+                p.insert_text((x, y), sat, fontname="F", fontsize=GOVDE)
+            y += GOVDE * 1.45
+        y += 4
+    doc.save(yol)

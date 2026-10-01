@@ -243,5 +243,10 @@ ok("Aristo'da modal önermeler &amp; &lt;tırnak&gt;" in _dosyalar["OEBPS/nav.xh
    and "<dc:title>Aristo'nun Mantığı</dc:title>" in _opf,
    "Kesme işareti kaçışlanmaz (nav, başlık, künye); & ve < kaçışlı; dosyalar geçerli XML")
 
+# Eski OCR katmanı satırı aynı yükseklikte parçalara bölmüş: parçalar birleşir, paragraf cümle ortasında bölünmez
+fixtur_uret.parcali_pdf(os.path.join(klasor, "parcali.pdf"))
+_ps = [b["metin"]["tr"] for b in kaynak.cevir(os.path.join(klasor, "parcali.pdf"))["bloklar"] if b["tur"] == "p"]
+ok(_ps == fixtur_uret.PARCALI_METIN, f"Aynı satırdaki parçalar birleşir, paragraf bölünmez ({len(_ps)} paragraf)")
+
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)
