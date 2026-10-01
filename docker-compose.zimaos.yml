@@ -90,7 +90,7 @@ x-casaos:
   index: /
   port_map: "8075"
   scheme: http
-  icon: https://raw.githubusercontent.com/berzahbey/dedplay-studyo/main/icon.png
+  icon: https://raw.githubusercontent.com/berzahbey/dedplay-kutuphane/main/icon.png
   title:
     en_us: Dedplay Kütüphane
   tagline:
