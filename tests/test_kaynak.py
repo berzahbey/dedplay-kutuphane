@@ -248,5 +248,66 @@ fixtur_uret.parcali_pdf(os.path.join(klasor, "parcali.pdf"))
 _ps = [b["metin"]["tr"] for b in kaynak.cevir(os.path.join(klasor, "parcali.pdf"))["bloklar"] if b["tur"] == "p"]
 ok(_ps == fixtur_uret.PARCALI_METIN, f"Aynı satırdaki parçalar birleşir, paragraf bölünmez ({len(_ps)} paragraf)")
 
+# Kitap açık taranmış PDF: her yatay sayfa cilt arasından ikiye bölünür (Ey Oğul, İlme Teşvik)
+_bosluk = lambda t: re.sub(r"\s+", " ", kaynak.K.NOT_ISARETI.sub(" ", t)).strip()
+
+
+def _ocr_benzer(bulunan, beklenen):
+    """OCR'lı metin: paragraf sayısı birebir, sınırlar (ilk/son iki kelime) aynı, metin en az %97 benzer. Tesseract
+    sürümüne göre tek harf okuma farkına izin verir (ör. dipnot işareti "1" kesme işareti okunabiliyor), sütun
+    karışmasına ve paragraf bölünmesine izin vermez."""
+    import difflib
+    return len(bulunan) == len(beklenen) and all(
+        a.split()[:2] == b.split()[:2] and a.split()[-2:] == b.split()[-2:]
+        and difflib.SequenceMatcher(None, a, b).ratio() >= 0.97 for a, b in zip(bulunan, beklenen))
+
+
+for _kip in ("katman", "tarama"):
+    _y = os.path.join(klasor, f"cift_{_kip}.pdf")
+    fixtur_uret.cift_sayfa_pdf(_y, _kip)
+    _S, _b = kaynak.pdf_sayfalari(_y)
+    _kit = kaynak.cevir(_y)
+    _bl = _kit["bloklar"]
+    ok((1, 0) in _b["kaynak_sayfa"] and (1, 1) in _b["kaynak_sayfa"] and (0, None) in _b["kaynak_sayfa"],
+       f"Çift sayfa ({_kip}): yatay sayfa ikiye bölündü, dik kapak bölünmedi")
+    _ps = [_bosluk(x["metin"]["tr"]) for x in _bl if x["tur"] == "p"]
+    ok(_ps == fixtur_uret.CIFT_PARAGRAFLAR if _kip == "katman" else _ocr_benzer(_ps, fixtur_uret.CIFT_PARAGRAFLAR),
+       f"Çift sayfa ({_kip}): paragraflar sayfa geçişlerinde bölünmeden birleşti")
+    ok([sy["no"] for x in _bl for sy in x.get("sayfalar", [])] == ["1", "2", "3", "4"],
+       f"Çift sayfa ({_kip}): her kitap sayfasının kendi basılı numarası")
+    ok(any("Zühd 25" in d["metin"]["tr"] for d in _kit["dipnotlar"].values()) and
+       any("{{n" in x["metin"]["tr"] for x in _bl if x["tur"] == "p"),
+       f"Çift sayfa ({_kip}): sol sayfanın dipnotu kendi sayfasında, metne bağlı")
+# Tesseract 5.5 yan yana iki sayfanın satırlarını tek satır verebiliyor (sunucuda görüldü): taklitle sınanır
+import tess55_taklit
+for _kip in ("satir",):  # sunucuda gözlenen davranış; "kelime" kipi gerçekte görülmeyen uydurma bir senaryoydu
+    tess55_taklit.kur(_kip)
+    try:
+        _y = os.path.join(klasor, "cift_tarama.pdf")
+        _b = kaynak.pdf_sayfalari(_y)[1]
+        _kit = kaynak.cevir(_y)
+    finally:
+        tess55_taklit.kaldir()
+    _bl = _kit["bloklar"]
+    ok(sum(1 for _, y in _b["kaynak_sayfa"] if y == 0) == 2 and
+       _ocr_benzer([_bosluk(x["metin"]["tr"]) for x in _bl if x["tur"] == "p"], fixtur_uret.CIFT_PARAGRAFLAR) and
+       [sy["no"] for x in _bl for sy in x.get("sayfalar", [])] == ["1", "2", "3", "4"],
+       f"Çift sayfa, Tesseract 5.5 taklidi ({_kip}): satırlar ayrıldı, sayfa bölündü, paragraf ve numaralar doğru")
+_d = {"text": ["ÖNSÖZ", "tehlikelidir.", "Allah'ın", "Ey", "oğul"], "block_num": [1, 1, 1, 2, 2], "par_num": [1] * 5,
+      "line_num": [1, 1, 1, 1, 1], "left": [350, 1020, 1300, 150, 230], "width": [160, 250, 150, 60, 80],
+      "top": [90, 92, 92, 170, 170], "height": [30, 30, 30, 30, 30]}
+ok([r["text"] for r in kaynak._ocr_satirlari(_d, 72 / 300)] == ["ÖNSÖZ", "tehlikelidir. Allah'ın", "Ey oğul"],
+   "OCR satırı büyük boşlukta bölünür, normal kelime arasında bölünmez")
+ok(all(kaynak.pdf_sayfalari(os.path.join(klasor, f))[1]["cift_sayfa"] == 0 for f in ("km.pdf", "parcali.pdf")),
+   "Dik sayfalı kitaplarda sayfa bölünmez")
+import fitz as _fitz
+_d = _fitz.open()
+_p = _d.new_page(width=700, height=400)
+for _n in range(12):
+    _p.insert_text((40, 40 + _n * 22), "Geniş tek sütunlu yatay sayfa: satırlar sayfanın ortasından geçer, bölünmemeli. " * 1,
+                   fontsize=11)
+_rows = kaynak._katman_satirlari(_d[0])
+ok(kaynak._cilt_arasi(_rows, 700, 400) is None, "Tek sütunlu yatay sayfa bölünmez")
+
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)

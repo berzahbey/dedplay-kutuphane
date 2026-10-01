@@ -106,17 +106,23 @@ def _satir_parcalarini_birlestir(rows):
             ust, alt = max(o["top"], r["top"]), min(o["bot"], r["bot"])
             yuk = min(o["bot"] - o["top"], r["bot"] - r["top"])
             hmax, hmin = max(o["h"], r["h"]), min(o["h"], r["h"]) or 1
-            if yuk > 0 and alt - ust >= 0.6 * yuk and hmax / hmin <= 1.33 and -2 <= r["x0"] - o["x1"] <= 2.5 * hmax:
+            if yuk > 0 and alt - ust >= 0.6 * yuk and hmax / hmin <= 1.33 and (
+                    -2 <= r["x0"] - o["x1"] <= 2.5 * hmax or -2 <= o["x0"] - r["x1"] <= 2.5 * hmax):
                 es = o
                 break
         if es is None:
             out.append(dict(r))
             continue
-        es["text"] = TS.norm(es["text"] + " " + r["text"])
+        sol, sag = (es, r) if es["x0"] <= r["x0"] else (r, es)  # parça sıralamada önce gelse de solda olabilir
+        es["text"] = TS.norm(sol["text"] + " " + sag["text"])
+        es["x0"] = min(es["x0"], r["x0"])
         es["x1"], es["top"], es["bot"] = max(es["x1"], r["x1"]), min(es["top"], r["top"]), max(es["bot"], r["bot"])
         es["n"] = len(es["text"].split())
         es["kalin"] = es["kalin"] and r["kalin"]
-    return sorted(out, key=lambda r: (r["blok"], r["top"])) if len(out) < len(rows) else rows
+    if len(out) == len(rows):
+        return rows
+    # birleşme olduysa bir geçiş daha: büyüyen satır, daha önce geçilmiş parçayla ("bir" + "köprüdür, onun") birleşebilir
+    return _satir_parcalarini_birlestir(sorted(out, key=lambda r: (r["blok"], r["top"])))
 
 
 def _ocr_sayfa(args):
@@ -135,6 +141,15 @@ def _ocr_sayfa(args):
         d = pytesseract.image_to_data(img, lang=dil, config=ayar, output_type=pytesseract.Output.DICT)
     except Exception:
         d = pytesseract.image_to_data(img, config=ayar, output_type=pytesseract.Output.DICT)
+    rows = _ocr_satirlari(d, olcek, ayar)
+    rows += _kenar_numarasi(img, rows, olcek, dil)
+    return i, rows, page.rect.width, page.rect.height
+
+
+def _ocr_satirlari(d, olcek, ayar=""):
+    """Tesseract kelimeleri -> satırlar (PDF birimiyle). Satır içinde 3 harf yüksekliğinden büyük boşlukta satır
+    bölünür: Tesseract 5.5 yan yana iki kitap sayfasının (ya da iki sütunun) aynı yükseklikteki satırlarını tek satır
+    olarak verebiliyor ("ÖNSÖZ tehlikelidir…"). Normal kelime arası bir harf genişliği kadardır."""
     satir, sira = {}, []
     for k in range(len(d["text"])):
         t = (d["text"][k] or "").strip()
@@ -147,50 +162,63 @@ def _ocr_sayfa(args):
         satir[key].append((d["left"][k], t, d["height"][k], d["top"][k], d["width"][k]))
     rows = []
     for key in sira:
-        ws = sorted(satir[key])
-        hs = [h for _, t, h, _, _ in ws if any(c.isalpha() for c in t)]
+        tum = sorted(satir[key])
+        hs = [h for _, t, h, _, _ in tum if any(c.isalpha() for c in t)]
         lh = st.median(hs) if hs else 0
-        parca = []
-        for k, (_, t, h, _, _) in enumerate(ws):
-            if k > 0 and lh and h < lh * 0.62 and re.fullmatch(r"[\d]{1,3}", t):
-                parca.append("\ue000" + t + "\ue001")  # küçük (üst simge) dipnot numarası
-            elif k > 0 and lh and h < lh * 0.6 and re.fullmatch(r"[\d\W]+", t) and not ayar:
-                continue  # (içindekiler okumasında nokta dizisi korunur)
+        gruplar = [[tum[0]]]
+        for w in tum[1:]:
+            onceki = gruplar[-1][-1]
+            if lh and w[0] - (onceki[0] + onceki[4]) > 3 * lh:
+                gruplar.append([w])
             else:
-                parca.append((" " if parca else "") + t)
-        metin = TS.norm("".join(parca))
-        if metin:
-            rows.append({"text": metin, "h": lh * olcek, "top": min(w[3] for w in ws) * olcek,
-                         "bot": max(w[3] + w[2] for w in ws) * olcek, "x0": ws[0][0] * olcek,
-                         "x1": max(w[0] + w[4] for w in ws) * olcek, "n": len(metin.split()), "kalin": False,
-                         "blok": key[0] * 1000 + key[1], "ocr": True})
-    rows += _kenar_numarasi(img, rows, olcek, dil)
-    return i, rows, page.rect.width, page.rect.height
+                gruplar[-1].append(w)
+        for ws in gruplar:
+            parca = []
+            for k, (_, t, h, _, _) in enumerate(ws):
+                if k > 0 and lh and h < lh * 0.62 and re.fullmatch(r"[\d]{1,3}", t):
+                    parca.append("\ue000" + t + "\ue001")  # küçük (üst simge) dipnot numarası
+                elif k > 0 and lh and h < lh * 0.6 and re.fullmatch(r"[\d\W]+", t) and not ayar:
+                    continue  # (içindekiler okumasında nokta dizisi korunur)
+                else:
+                    parca.append((" " if parca else "") + t)
+            metin = TS.norm("".join(parca))
+            if metin:
+                rows.append({"text": metin, "h": lh * olcek, "top": min(w[3] for w in ws) * olcek,
+                             "bot": max(w[3] + w[2] for w in ws) * olcek, "x0": ws[0][0] * olcek,
+                             "x1": max(w[0] + w[4] for w in ws) * olcek, "n": len(metin.split()), "kalin": False,
+                             "blok": key[0] * 1000 + key[1], "ocr": True})
+    return _satir_parcalarini_birlestir(rows)  # Tesseract'ın parçalı verdiği aynı satır (boşluk ≤ 2,5 harf) birleşir
 
 
 def _kenar_numarasi(img, rows, olcek, dil):
-    """Tesseract tek başına duran sayfa numarasını çoğu zaman görmez: üst ve alt şeritler sadece rakamla okunur."""
+    """Tesseract tek başına duran sayfa numarasını çoğu zaman görmez: üst ve alt şeritler sadece rakamla okunur.
+    Yatay (kitap açık taranmış) sayfada iki kitap sayfası var: her yarı için ayrı aranır."""
     import pytesseract
     W, H = img.size
-    kenar = [r for r in rows if (r["top"] / olcek < H * 0.12 or r["bot"] / olcek > H * 0.88)
-             and TS.PAGE_NUM.match(r["text"].strip())]
-    if kenar:
-        return []
+    yarilar = [(0, W // 2), (W // 2, W)] if W > H * 1.1 else [(0, W)]
     out = []
-    for y0, y1 in ((0, int(H * 0.10)), (int(H * 0.90), H)):
-        serit = img.crop((0, y0, W, y1))
-        try:
-            d = pytesseract.image_to_data(serit, lang=dil, config="--psm 6", output_type=pytesseract.Output.DICT)
-        except Exception:
+    for xa, xb in yarilar:
+        kenar = [r for r in rows if (r["top"] / olcek < H * 0.12 or r["bot"] / olcek > H * 0.88)
+                 and TS.PAGE_NUM.match(r["text"].strip()) and xa <= (r["x0"] + r["x1"]) / 2 / olcek < xb]
+        if kenar:
             continue
-        for k, t in enumerate(d["text"]):
-            t = (t or "").strip()
-            if re.fullmatch(r"\d{1,4}", t) and float(d["conf"][k]) > 60:
-                top = (y0 + d["top"][k]) * olcek
-                out.append({"text": t, "h": d["height"][k] * olcek, "top": top, "bot": top + d["height"][k] * olcek,
-                            "x0": d["left"][k] * olcek, "x1": (d["left"][k] + d["width"][k]) * olcek, "n": 1,
-                            "kalin": False, "blok": -1, "ocr": True})
-    return out[:1]
+        bulunan = []
+        for y0, y1 in ((0, int(H * 0.10)), (int(H * 0.90), H)):
+            serit = img.crop((xa, y0, xb, y1))
+            try:
+                d = pytesseract.image_to_data(serit, lang=dil, config="--psm 6", output_type=pytesseract.Output.DICT)
+            except Exception:
+                continue
+            for k, t in enumerate(d["text"]):
+                t = (t or "").strip()
+                if re.fullmatch(r"\d{1,4}", t) and float(d["conf"][k]) > 60:
+                    top = (y0 + d["top"][k]) * olcek
+                    bulunan.append({"text": t, "h": d["height"][k] * olcek, "top": top,
+                                    "bot": top + d["height"][k] * olcek, "x0": (xa + d["left"][k]) * olcek,
+                                    "x1": (xa + d["left"][k] + d["width"][k]) * olcek, "n": 1,
+                                    "kalin": False, "blok": -1, "ocr": True})
+        out += bulunan[:1]
+    return out
 
 
 def pdf_sayfalari(yol, ilerleme=None):
@@ -221,15 +249,72 @@ def pdf_sayfalari(yol, ilerleme=None):
                 sayfalar[i] = (rows, w, h, True)
                 if ilerleme:
                     ilerleme(f"OCR: sayfa {k + 1}/{len(ocr)}")
+    sayfalar, kaynak = _cift_sayfalari_bol(sayfalar)
+    bilgi["kaynak_sayfa"] = kaynak  # her sayfa için (PDF'teki sırası, yarısı: None tek sayfa / 0 ilk / 1 ikinci)
+    bilgi["cift_sayfa"] = sum(1 for _, y in kaynak if y == 0)
+    ilk_yeni = {}
+    for j, (i, _) in enumerate(kaynak):
+        ilk_yeni.setdefault(i, j)
     bilgi["kapak_resmi"] = _pdf_kapak(doc)
     meta = doc.metadata or {}
-    try:  # PDF yer imleri (bookmarks): [[seviye, başlık, sayfa(1'den)], ...]
-        bilgi["yer_imleri"] = [(int(a), TS.norm(b), int(c)) for a, b, c in doc.get_toc(simple=True) if (b or "").strip() and 1 <= int(c) <= n]
+    try:  # PDF yer imleri (bookmarks): [[seviye, başlık, sayfa(1'den)], ...]; çift sayfada yeni sıraya çevrilir
+        bilgi["yer_imleri"] = [(int(a), TS.norm(b), ilk_yeni[int(c) - 1] + 1) for a, b, c in doc.get_toc(simple=True)
+                               if (b or "").strip() and 1 <= int(c) <= n]
     except Exception:
         bilgi["yer_imleri"] = []
     bilgi["baslik"] = (meta.get("title") or "").strip()
     bilgi["yazar"] = (meta.get("author") or "").strip()
     return sayfalar, bilgi
+
+
+def _cilt_arasi(rows, w, h):
+    """Yatay sayfada iki kitap sayfası yan yana mı (kitap açık taranmış): hiçbir satırın üstünden geçmediği, ortaya
+    yakın boş dikey şeridin ortası; yoksa None."""
+    if w <= h * 1.1:
+        return None
+    yazili = [r for r in rows if _harf(r["text"]) >= 3]
+    if len(yazili) < 6:
+        return None
+    bos = [g for g in range(int(w * 0.3), int(w * 0.7) + 1)
+           if not any(r["x0"] < g - 1 and r["x1"] > g + 1 for r in yazili)]
+    seritler, bas = [], None
+    for k, g in enumerate(bos):
+        if bas is None:
+            bas = g
+        if k + 1 == len(bos) or bos[k + 1] != g + 1:
+            seritler.append((bas, g))
+            bas = None
+    seritler = [(a, b) for a, b in seritler if b - a >= 6]
+    if not seritler:
+        return None
+    a, b = min(seritler, key=lambda s: abs((s[0] + s[1]) / 2 - w / 2) - (s[1] - s[0]) / 4)
+    g = (a + b) / 2
+    sol, sag = sum(1 for r in yazili if r["x1"] <= g), sum(1 for r in yazili if r["x0"] >= g)
+    return g if sol >= 3 and sag >= 3 else None
+
+
+def _cift_sayfalari_bol(sayfalar):
+    """Kitap açık taranmış (her PDF sayfasında iki kitap sayfası) PDF'lerde her yatay sayfa cilt arasından ikiye
+    bölünür; sağ yarının satırları sola kaydırılır. Sıra: Latin yazılı kitapta sol-sağ, Arapça yazılıda sağ-sol.
+    Döndürür: (yeni sayfa listesi, [(PDF'teki sırası, yarısı)])."""
+    yeni, kaynak = [], []
+    for i, (rows, w, h, ocr) in enumerate(sayfalar):
+        g = _cilt_arasi(rows, w, h)
+        if g is None:
+            yeni.append((rows, w, h, ocr))
+            kaynak.append((i, None))
+            continue
+        sira = lambda r: (r["top"], r["x0"])  # tek sütunlu kitap sayfası: yukarıdan aşağı (Tesseract iki sayfanın
+        # satırlarını birleştirip bölünmüşse sağ yarının satırları karışık sırada gelir)
+        sol = sorted((r for r in rows if (r["x0"] + r["x1"]) / 2 < g), key=sira)
+        sag = sorted((dict(r, x0=r["x0"] - g, x1=r["x1"] - g) for r in rows if (r["x0"] + r["x1"]) / 2 >= g), key=sira)
+        metin = " ".join(r["text"] for r in rows)
+        sagdan = len(re.findall(r"[\u0600-\u06FF]", metin)) > len(re.findall(r"[A-Za-zÇĞİÖŞÜçğıöşü]", metin))
+        yarilar = [(sag, w - g), (sol, g)] if sagdan else [(sol, g), (sag, w - g)]
+        for k, (rs, ww) in enumerate(yarilar):
+            yeni.append((rs, ww, h, ocr))
+            kaynak.append((i, k))
+    return yeni, kaynak
 
 
 def _pdf_kapak(doc):
@@ -641,7 +726,7 @@ def _ocr_icindekiler(yol, i, dil):
     return rows, page.rect.width, page.rect.height
 
 
-def _icindekiler_devami(yol, sayfalar, satirlar, toc_sayfalari):
+def _icindekiler_devami(yol, sayfalar, satirlar, toc_sayfalari, kaynak=None):
     """Taranmış içindekiler sayfası nokta dizilerine dayanıklı okumayla (_ocr_icindekiler) yeniden okunur (satirlar
     yerinde güncellenir). Hemen ardındaki başlıksız sayfa, satırlarının çoğu içindekiler
     girdisiyse (en az 3) içindekilerin devamıdır."""
@@ -650,8 +735,9 @@ def _icindekiler_devami(yol, sayfalar, satirlar, toc_sayfalari):
     dil = os.environ.get("OCR_LANG", "tur")
 
     def oku(i):
-        if sayfalar[i][3]:
-            rows, w, h = _ocr_icindekiler(yol, i, dil)
+        asil, yari = kaynak[i] if kaynak else (i, None)
+        if sayfalar[i][3] and yari is None:  # çift sayfanın yarısı PDF'te tek başına yok: mevcut okuma
+            rows, w, h = _ocr_icindekiler(yol, asil, dil)
             return _sayfa_no_ve_kenar(rows, h)[1]
         return satirlar[i]
     out = []
@@ -1079,7 +1165,7 @@ def pdf_oku(yol, ilerleme=None):
     kalan = [int(s[0]) for s in tut]
     # basılı içindekiler sayfaları (başta, sonda ya da önsözden sonra): metinden çıkar, kitabın sonuna eklenir
     toc_sayfalari = [i for i in range(n) if (i < max(20, n // 5) or i >= n - 15) and _icindekiler_sayfasi(satirlar[i])]
-    toc_sayfalari = _icindekiler_devami(yol, sayfalar, satirlar, toc_sayfalari)
+    toc_sayfalari = _icindekiler_devami(yol, sayfalar, satirlar, toc_sayfalari, bilgi.get("kaynak_sayfa"))
     if toc_sayfalari:  # içindekiler sayfalarının arasına/devamına düşen numaralı satır sayfaları da
         kalan = [i for i in kalan if i not in toc_sayfalari]
     satirlar_k = _tekrar_edenleri_at([satirlar[i] for i in kalan])

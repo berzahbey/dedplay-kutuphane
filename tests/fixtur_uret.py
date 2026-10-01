@@ -405,3 +405,76 @@ def parcali_pdf(yol):
             y += GOVDE * 1.45
         y += 4
     doc.save(yol)
+
+
+# ---- Kitap açık taranmış PDF (Ey Oğul, İlme Teşvik): her yatay PDF sayfasında iki kitap sayfası yan yana; her
+# yarının kendi basılı numarası ve dipnotu; paragraflar sol sayfadan sağa ve bir PDF sayfasından ötekine taşar.
+CIFT_CUMLELER = [
+    "Ey oğul, nasihat kolaydır, zor olan onu kabul etmektir.", "Nefsine uyan kimse kendi eliyle kuyusunu kazar.",
+    "İlim amelsiz deliliktir, amel de ilimsiz olmaz.", "Bugün çalışmayan kimse yarın ücret bekleyemez.",
+    "Vaktini boşa harcayan ömrünü harcamış olur.", "Kalbin hastalıkları bedenin hastalıklarından daha tehlikelidir.",
+    "Allah'ın rızasını gözetmeyen amel boşa gider.", "Dünya bir köprüdür, onun üzerinden geçilir, orada ev kurulmaz.",
+    "Gece kalkıp ibadet etmek salihlerin âdetidir.", "Sabır acıdır ama meyvesi tatlıdır.",
+    "Gıybet eden kimse kardeşinin etini yemiş gibidir.", "Az yemek kalbi aydınlatır, çok yemek karartır.",
+    "Hikmet müminin yitik malıdır, onu nerede bulursa alır.", "Kibir şeytanın kapısıdır, tevazu ise meleklerin.",
+    "Her nefis ölümü tadacaktır, hazırlıklı olan kurtulur.", "Âlimin uykusu cahilin ibadetinden hayırlıdır.",
+    "Zikir kalbin gıdası, tefekkür ise ruhun ışığıdır.", "Haram lokma duayı perdeler, helal lokma kabule yol açar.",
+    "İnsanlar uykudadır, öldüklerinde uyanırlar.", "Kendini hesaba çeken kimse kıyamette hafif hesap verir.",
+]
+CIFT_PARAGRAFLAR = [" ".join(CIFT_CUMLELER[i:i + 4]) for i in range(0, 20, 4)]  # 5 paragraf
+CIFT_DIPNOT = "Hadis, Tirmizî, Zühd 25."
+
+
+def cift_sayfa_pdf(yol, kip="katman"):
+    """1 dik kapak + 3 yatay PDF sayfası (6 kitap sayfası, basılı 1-6). 2. kitap sayfasında dipnot."""
+    PW, PH, YARI, YK = 440, 321, 220, 8.5
+    tmp = fitz.open()
+    k = tmp.new_page(width=220, height=321)
+    k.insert_font(fontname="B", fontfile=SERIF_B)
+    k.insert_text((40, 150), "EY OĞUL DENEMESİ", fontname="B", fontsize=12)
+    # metni kitap sayfalarına dök: her kitap sayfası 9 satır
+    satir_listesi = []
+    for n, par in enumerate(CIFT_PARAGRAFLAR):
+        if n == 0:
+            par = par.replace("olmaz.", "olmaz.@1@", 1)
+        for j, sat in enumerate(satirlar(par, SERIF, YK, YARI - 50 - 10)):
+            satir_listesi.append((j == 0, sat))
+    kitap_sayfalari = [satir_listesi[i:i + 9] for i in range(0, len(satir_listesi), 9)]
+    while len(kitap_sayfalari) < 6:
+        kitap_sayfalari.append([])
+    for sp in range(3):
+        p = tmp.new_page(width=PW, height=PH)
+        p.insert_font(fontname="F", fontfile=SERIF)
+        for yari in range(2):
+            ks = sp * 2 + yari
+            x0 = (YARI if yari else 0) + 25
+            y = 30
+            dipnotlu = False
+            if ks == 0:  # asıl metin bir içerik başlığıyla başlar
+                p.insert_font(fontname="B", fontfile=SERIF_B)
+                p.insert_text((x0 + 60, y), "ÖNSÖZ", fontname="B", fontsize=YK + 1)
+                y += YK * 2.2
+            for ilk, sat in kitap_sayfalari[ks]:
+                x = x0 + (12 if ilk else 0)
+                if "@1@" in sat:
+                    on, arka = sat.split("@1@")
+                    p.insert_text((x, y), on, fontname="F", fontsize=YK)
+                    xx = x + font_w(on, SERIF, YK) + 0.5
+                    p.insert_text((xx, y - 3), "1", fontname="F", fontsize=5.5)
+                    p.insert_text((xx + 4, y), arka.lstrip(), fontname="F", fontsize=YK)
+                    dipnotlu = True
+                else:
+                    p.insert_text((x, y), sat, fontname="F", fontsize=YK)
+                y += YK * 1.45
+            if dipnotlu:
+                p.draw_line((x0, PH - 42), (x0 + 50, PH - 42), width=0.4)
+                p.insert_text((x0, PH - 33), "1 " + CIFT_DIPNOT, fontname="F", fontsize=6.5)
+            p.insert_text(((YARI if yari else 0) + YARI / 2 - 3, PH - 14), str(ks + 1), fontname="F", fontsize=7)
+    if kip == "katman":
+        tmp.save(yol)
+        return
+    out = fitz.open()
+    for p in tmp:
+        yeni = out.new_page(width=p.rect.width, height=p.rect.height)
+        yeni.insert_image(yeni.rect, stream=p.get_pixmap(dpi=300).tobytes("png"))
+    out.save(yol)
