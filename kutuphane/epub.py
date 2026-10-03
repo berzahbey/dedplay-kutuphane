@@ -348,12 +348,13 @@ class _Uretici:
         fihrist = "".join(ol) if self.fihrist else '<ol><li><a href="metin/kunye.xhtml">Künye</a></li></ol>'
         sayfalar = "".join(f'<li><a href="metin/{h}">{XM(e)}</a></li>' for e, h in self.sayfa_listesi)
         ilk = self.fihrist[0][2] if self.fihrist else "kunye.xhtml"
-        govde = (f'<nav epub:type="toc" id="toc" role="doc-toc"{_attr(self.ana)}><h1>{XM(self._fihrist_adi())}</h1>{fihrist}</nav>\n'
+        # 0.5.8: EPUB'da liste yok. Standart (EPUB 3) bir "toc" ister: kitabın başına giden tek bağlantı, gizli
+        fihrist = f'<ol><li><a href="metin/{ilk}">{XM(self.baslik)}</a></li></ol>'
+        govde = (f'<nav epub:type="toc" id="toc" role="doc-toc" hidden="hidden"{_attr(self.ana)}><h1>{XM(self._fihrist_adi())}</h1>{fihrist}</nav>\n'
                  + (f'<nav epub:type="page-list" id="page-list" hidden="hidden"><h2>Sayfalar</h2><ol>{sayfalar}</ol></nav>\n'
                     if sayfalar else "")
                  + '<nav epub:type="landmarks" id="landmarks" hidden="hidden"><h2>Yer imleri</h2><ol>'
                  '<li><a epub:type="cover" href="metin/kapak.xhtml">Kapak</a></li>'
-                 '<li><a epub:type="toc" href="nav.xhtml">Fihrist</a></li>'
                  f'<li><a epub:type="bodymatter" href="metin/{ilk}">Metin</a></li></ol></nav>')
         return (self._sayfa(self._fihrist_adi(), govde)
                 .replace('href="../css/kitap.css"', 'href="css/kitap.css"'))
@@ -440,7 +441,7 @@ def uret(kit, diller, cikti_yolu=None, baslik=None, kapak_png=None):
                 for yol, _, mt, mid, oz in dosyalar]
     spine = ['<itemref idref="kapak" linear="yes"/>', '<itemref idref="kunye"/>']
     spine += [f'<itemref idref="{mid}"/>' for _, _, mid in icerik]
-    spine.append('<itemref idref="nav"/>')  # fihrist sayfası kitabın sonunda (liste düğmesi yine çalışır)
+    # 0.5.8: fihrist sayfası okuma sırasında yok (EPUB'da liste ve içindekiler istenmiyor)
     ppd = ' page-progression-direction="rtl"' if u.rtl else ""
     opf = (f'<?xml version="1.0" encoding="utf-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" '
            f'unique-identifier="kimlik" xml:lang="{lang}" dir="{"rtl" if u.rtl else "ltr"}">\n'

@@ -239,7 +239,7 @@ def isci():
             _kuyruk.task_done()
 
 
-OTOMATIK_CEVIRI = os.environ.get("OTOMATIK_CEVIRI", "1") == "1"
+OTOMATIK_CEVIRI = False  # 0.5.8: çeviri kaldırıldı (Translate yok)
 
 
 def _otomatik_ceviri(kid):
@@ -314,7 +314,7 @@ def is_ekle(is_turu, kid, arg=None, **durum):
 
 def baslat():
     threading.Thread(target=isci, daemon=True, name="kutuphane-isci").start()
-    threading.Thread(target=ceviri_izleyici, daemon=True, name="kutuphane-ceviri").start()
+    # 0.5.8: çeviri kaldırıldı; çeviri izleyicisi başlatılmaz
     # yeniden başlatmada yarım kalan işler kuyruğa geri alınır
     for k in liste():
         if k.get("asama") not in (None, "hazır", "hata"):

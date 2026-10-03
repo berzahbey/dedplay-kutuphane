@@ -1,5 +1,6 @@
 """Dedplay Kütüphane: kitap arama, ekleme, EPUB üretme (ve ileride okuma/düzeltme)."""
 import os
+import re
 from urllib.parse import quote
 
 import requests
@@ -15,7 +16,7 @@ from . import kitap as K
 KAYNAK = os.environ.get("KAYNAK_DIR", "/kaynak")
 UZANTILAR = (".pdf", ".epub", ".docx", ".txt")
 
-SURUM = "0.5.7"
+SURUM = "0.5.6"
 STATIK = os.path.join(os.path.dirname(__file__), "static")
 HOST = "http://host.docker.internal"
 SERVISLER = {
@@ -143,6 +144,25 @@ def sunucudan_ekle(g: SunucuDosyasi):
     if not os.path.isfile(tam) or not tam.lower().endswith(UZANTILAR):
         raise HTTPException(400, "Sadece PDF, EPUB, DOCX ve TXT dosyaları eklenebilir")
     return _dosya_isi(tam, os.path.basename(tam))
+
+
+class MetinIstegi(BaseModel):
+    baslik: str
+    metin: str
+
+
+@app.post("/api/kitaplar/metin")
+def metin_ekle(g: MetinIstegi):
+    """Yapıştırılan metin: TXT dosyası olarak kaydedilir, yüklenen kitap gibi işlenir (temizlik, okuma ekranı)."""
+    baslik = re.sub(r"[\\/:*?\"<>|]+", " ", (g.baslik or "").strip())[:120].strip() or "Metin"
+    if len(g.metin.strip()) < 20:
+        raise HTTPException(400, "Metin çok kısa")
+    klasor = os.path.join(depo.VERI, "yuklenen")
+    os.makedirs(klasor, exist_ok=True)
+    hedef = os.path.join(klasor, baslik + ".txt")
+    with open(hedef, "w", encoding="utf-8") as f:
+        f.write(g.metin)
+    return _dosya_isi(hedef, baslik + ".txt")
 
 
 @app.post("/api/kitaplar/yukle")
@@ -286,34 +306,9 @@ class CeviriIstegi(BaseModel):
 
 
 @app.post("/api/kitaplar/{kid}/cevir")
-def cevir(kid: str, g: CeviriIstegi):
-    kit = _kitap(kid)
-    c = depo.durum_oku(kid).get("ceviri") or {}
-    if c.get("durum") == "calisiyor":
-        raise HTTPException(409, "Çeviri zaten sürüyor")
-    try:
-        yeni = ceviri.baslat(kit, depo.klasor(kid), g.sonra_studyo)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except requests.RequestException as e:
-        raise HTTPException(503, f"Translate'e ulaşılamadı: {type(e).__name__}")
-    except RuntimeError as e:
-        raise HTTPException(502, str(e))
-    depo.durum_yaz(kid, ceviri=yeni)
-    return yeni
-
-
 @app.delete("/api/kitaplar/{kid}/cevir")
-def ceviri_durdur(kid: str):
-    c = depo.durum_oku(kid).get("ceviri") or {}
-    if c.get("durum") != "calisiyor":
-        raise HTTPException(409, "Süren bir çeviri yok")
-    try:
-        requests.delete(f"{ceviri.TRANSLATE_URL}/api/jobs/{c['is']}", timeout=30)
-    except requests.RequestException:
-        pass
-    depo.durum_yaz(kid, ceviri=dict(c, durum="durduruldu"))
-    return {"ok": True}
+def cevir_kaldirildi(kid: str):
+    raise HTTPException(410, "Çeviri kaldırıldı (0.5.8)")
 
 
 # ---------------- Okuma ve düzeltme ----------------

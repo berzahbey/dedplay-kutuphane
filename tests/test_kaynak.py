@@ -19,30 +19,28 @@ def ok(kosul, ad):
 
 klasor = tempfile.mkdtemp()
 fixtur_uret.hepsini_uret(klasor)
-BEKLENEN_FIHRIST = ["ÖNSÖZ", "BİRİNCİ BÖLÜM", "İlmin Şerefi", "İKİNCİ BÖLÜM", "Kelâmın Önemi", "SONUÇ", "İçindekiler"]
+BEKLENEN_FIHRIST = ["ÖNSÖZ", "BİRİNCİ BÖLÜM", "İlmin Şerefi", "İKİNCİ BÖLÜM", "Kelâmın Önemi", "SONUÇ"]
 for tur in ("katman", "tarama", "bozuk"):
     kit = kaynak.cevir(os.path.join(klasor, f"deneme_{tur}.pdf"))
     bl = kit["bloklar"]
     ok(K.denetle(kit) == [], f"PDF {tur}: yapısal denetim")
     ok([b["metin"]["tr"] for b in bl if b["tur"] == "baslik"] == BEKLENEN_FIHRIST, f"PDF {tur}: fihrist")
-    ok([b["seviye"] for b in bl if b["tur"] == "baslik"] == [1, 1, 2, 1, 2, 1, 1], f"PDF {tur}: başlık seviyeleri")
+    ok([b["seviye"] for b in bl if b["tur"] == "baslik"] == [1, 1, 2, 1, 2, 1], f"PDF {tur}: başlık seviyeleri")
     ok([s["no"] for b in bl for s in b.get("sayfalar", [])] == ["5", "6", "7", "8", "9", "10"], f"PDF {tur}: basılı sayfa numaraları")
     s8 = next((b, s) for b in bl for s in b.get("sayfalar", []) if s["no"] == "8")
     ok(s8[0]["metin"]["tr"][s8[1]["konum"]["tr"]:].startswith("zorunlu"), f"PDF {tur}: sayfa geçişinde bölünen kelime birleşti")
     ok(len(kit["dipnotlar"]) == 2 and all("sahiptir.{{" in b["metin"]["tr"] for b in bl if "{{" in b["metin"]["tr"]),
        f"PDF {tur}: iki dipnot doğru yere bağlı")
     ok(kit["kunye"]["baslik"]["tr"] == "İtikadda Orta Yol", f"PDF {tur}: eser adı kapaktan")
-    ic = next(k for k, b in enumerate(bl) if b["metin"]["tr"] == "İçindekiler")
-    ok(not any("ISBN" in b["metin"]["tr"] for b in bl) and ic > len(bl) - 8
-       and (tur != "katman" or (len(bl) - ic - 1 >= 3 and any("BÖLÜM" in b["metin"]["tr"] for b in bl[ic:])))
-       and sum(1 for b in bl if "İÇİNDEKİLER" in b["metin"]["tr"].upper().replace("I", "İ")) == 1,
-       f"PDF {tur}: künye atıldı, basılı içindekiler kitabın sonunda (tek başlık)")
+    ok(not any("ISBN" in b["metin"]["tr"] for b in bl)
+       and not any("İÇİNDEKİLER" in b["metin"]["tr"].upper().replace("I", "İ") for b in bl),
+       f"PDF {tur}: künye atıldı, basılı içindekiler kitaptan silindi (0.5.8)")
     ok(kit["kunye"]["cikarma"]["bozuk_katman"] == (tur == "bozuk"), f"PDF {tur}: bozuk katman tespiti")
 
 kit = kaynak.cevir(os.path.join(klasor, "Erzurumlu Ibrahim Hakki - Marifetname.epub"))
 bl = kit["bloklar"]
 ok(K.denetle(kit) == [] and len(kit["dipnotlar"]) == 2, "EPUB: iki dipnot bağlı")
-ok([b["metin"]["tr"] for b in bl if b["tur"] == "baslik"] == ["Mukaddime", "Birinci Bâb", "Birinci Fasıl", "İçindekiler"], "EPUB: Notlar atıldı, başlıklar, içindekiler sonda")
+ok([b["metin"]["tr"] for b in bl if b["tur"] == "baslik"] == ["Mukaddime", "Birinci Bâb", "Birinci Fasıl"], "EPUB: Notlar atıldı, başlıklar, içindekiler sonda")
 ok(bl[1]["metin"]["tr"].startswith("Hamd") and [s["no"] for b in bl for s in b.get("sayfalar", [])] == ["3", "5", "6"], "EPUB: ilk paragraf ve sayfa işaretleri")
 ok(kit["kunye"]["baslik"]["tr"] == "Mârifetnâme" and kit["kunye"]["yazar"]["tr"] == "Erzurumlu İbrahim Hakkı", "EPUB: künye")
 kit = kaynak.cevir(os.path.join(klasor, "deneme.docx"))
@@ -103,8 +101,9 @@ for n in range(22, 92):
     _p(n)
 nav = zipfile.ZipFile(io.BytesIO(epub.uret(kit, ["tr"]))).read("OEBPS/nav.xhtml").decode().split('epub:type="toc"')[1].split("</nav>")[0]
 etiketler = re.findall(r'<a href="[^"]+">([^<]+)</a>', nav)
-ok(etiketler == ["Bölüm 001 (1-4)", "Bölüm 002 (5-20) GİRİŞ", "Bölüm 003 (21-38) BİRİNCİ BÖLÜM", "Bölüm 004 (39-56)",
-                 "Bölüm 005 (57-74)", "Bölüm 006 (75-91)"], f"Numaralı fihrist ve uzun bölümün bölünmesi {etiketler}")
+ok(len(etiketler) == 1 and sum(a.startswith("OEBPS/metin/bolum_") for a in
+                                zipfile.ZipFile(io.BytesIO(epub.uret(kit, ["tr"]))).namelist()) == 6,
+   f"EPUB'da liste yok (tek gizli bağlantı); uzun bölüm yine 6 dosyaya bölünür {etiketler}")
 ok(not [t for t in ["TİRE", "? vâcib ola tertibi bozmuş olu”"] if kaynak.anlamli_baslik(t)], "Başlık denetimi: TİRE ve ? ile başlayan satır")
 ok(kaynak._eksik_numaralari_doldur([None, None, "3", "4", "5", "6", "7", "2877", "9", "10", "11", None, "13"])
    == [str(i) for i in range(1, 14)], "Yanlış okunmuş sayfa numarası (2877) düzeltilir")
@@ -130,15 +129,15 @@ ok(kit["kunye"].get("yapi") == "fihrist" and K.denetle(kit) == [], "EPUB fihrist
 ok([(b["metin"]["tr"], b["seviye"]) for b in bl if b["tur"] == "baslik"] == [
     ("MEDENİYETLERİN DEFTER-İ AMALİ: ANSİKLOPEDİLER", 1), ("I-BATIDA ANSİKLOPEDİ", 1), ("BİR TÜRÜN TARİH ÖNCESİ", 2),
     ("BELGELER TEORİSİ.", 2), ("II — İSLÂM’DA ANSİKLOPEDİ", 1), ("İSLÂMIN KOZMOLOJİK DOKTRİNLERİ", 2), ("DOĞU KÜTÜPHANESİ", 1),
-    ("İçindekiler", 1)],
+    ],
    "EPUB fihristi: başlıklar, seviyeler ve temiz yazılar (Roma rakamı korunur)")
 ok(not any(x in b["metin"]["tr"] for b in bl for x in ("CEMİL MERİÇ", "PINAR")) and bl[0]["metin"]["tr"].startswith("MEDENİYETLERİN")
-   and [b["metin"]["tr"] for b in bl if b["tur"] == "baslik"][-1] == "İçindekiler", "EPUB fihristi: ön sayfalar atıldı, içindekiler sonda")
+   and not any(b["metin"]["tr"] == "İçindekiler" for b in bl), "EPUB fihristi: ön sayfalar atıldı, içindekiler silindi")
 ok(any(b["metin"]["tr"].startswith("Doğu kütüphanesi hakkında") for b in bl), "EPUB fihristi: başlığa benzeyen paragraf kaybolmadı")
 ok(any("Nasır’ın {{n0001}} tezini" in b["metin"]["tr"] for b in bl) and len(kit["dipnotlar"]) == 1, "Kesme işareti boşluğu ve ( 2 ) dipnotu")
 import zipfile as _z, io as _io
 _nav = _z.ZipFile(_io.BytesIO(epub.uret(kit, ["tr"]))).read("OEBPS/nav.xhtml").decode()
-ok("Bölüm 001" not in _nav and "MEDENİYETLERİN DEFTER-İ AMALİ" in _nav, "Orijinal fihrist olduğu gibi (numaralandırılmaz)")
+ok(_nav.split('epub:type="toc"')[1].split("</nav>")[0].count("<li>") == 1, "EPUB'da görünür liste yok (0.5.8)")
 
 # PDF yer imleri (bookmarks): başlıklar oradan; sayfada bulunamayan yer imi sayfa başına eklenir
 import fitz
@@ -152,14 +151,14 @@ _d.save(os.path.join(klasor, "yi2.pdf"))
 kit = kaynak.cevir(os.path.join(klasor, "yi2.pdf"))
 bas = [(b["metin"]["tr"], b["seviye"]) for b in kit["bloklar"] if b["tur"] == "baslik"]
 ok(kit["kunye"].get("yapi") == "fihrist" and K.denetle(kit) == [], "PDF yer imleri kullanıldı")
-ok([x[0] for x in bas] == ["Önsöz", "Birinci Bölüm: İlmin Şerefi", "Şüphe ve İlim", "İKİNCİ BÖLÜM", "Kelâmın Önemi", "SONUÇ", "İçindekiler"]
-   and [x[1] for x in bas] == [1, 1, 2, 1, 2, 1, 1], f"PDF yer imleri: başlıklar ve seviyeler {bas}")
+ok([x[0] for x in bas] == ["Önsöz", "Birinci Bölüm: İlmin Şerefi", "Şüphe ve İlim", "İKİNCİ BÖLÜM", "Kelâmın Önemi", "SONUÇ"]
+   and [x[1] for x in bas] == [1, 1, 2, 1, 2, 1], f"PDF yer imleri: başlıklar ve seviyeler {bas}")
 ok(not any(b["tur"] == "baslik" and b["metin"]["tr"] == "İlmin Şerefi" for b in kit["bloklar"]), "Yer imi yokken tanınan alt başlık paragrafa döner")
 
 # Basılı içindekilerden fihrist (Klasik Mantık tipi): yer imi yok, başlıklar gövdeyle aynı puntoda, içindekiler iki sayfa
 BEKLENEN_TOC = [("ÖNSÖZ", 1), ("GİRİŞ", 1), ("BİRİNCİ BÖLÜM: KAVRAMLAR", 1), ("Kavramın Tanımı", 2),
                 ("Kavramların Birbirine Göre Durumları ve Beş Tümel Meselesi", 2), ("İKİNCİ BÖLÜM: ÖNERMELER", 1),
-                ("Önermenin Tanımı", 2), ("Karşıt Önermeler", 2), ("SONUÇ", 1), ("İçindekiler", 1)]
+                ("Önermenin Tanımı", 2), ("Karşıt Önermeler", 2), ("SONUÇ", 1)]
 for kip in ("katman", "tarama"):
     yol = os.path.join(klasor, f"mantik_{kip}.pdf")
     fixtur_uret.mantik_pdf(yol, kip)
@@ -172,22 +171,24 @@ for kip in ("katman", "tarama"):
     k_tanim = sira.index("Kavramın Tanımı")
     ok(sira[k_tanim - 1].startswith("Konuya başka") and sira[k_tanim + 1].startswith("Şimdi asıl"),
        f"İçindekiler ({kip}): sayfa ortasındaki başlık kendi yerinde")
-    govde_bl = bl[:[b["metin"]["tr"] for b in bl].index("İçindekiler")]
+    govde_bl = bl
     ok(not any(b["tur"] == "p" and b["metin"]["tr"].strip() in ("KAVRAMLAR", "BİRİNCİ BÖLÜM", "ÖNERMELER", "İKİNCİ BÖLÜM",
                                                                   "Önermenin Tanımı", "ve Beş Tümel Meselesi")
                for b in govde_bl), f"İçindekiler ({kip}): başlık satırları paragraf olarak tekrar etmiyor")
     ok(any(b["tur"] == "p" and b["metin"]["tr"] == "Örnek" for b in bl), f"İçindekiler ({kip}): kalın satır başlık sanılmadı")
     ok([s["no"] for b in bl for s in b.get("sayfalar", [])] == [str(n) for n in range(7, 15)],
        f"İçindekiler ({kip}): basılı sayfa numaraları")
-    son = [b["metin"]["tr"] for b in bl[[b["metin"]["tr"] for b in bl].index("İçindekiler") + 1:]]
+    son = []  # 0.5.8: basılı içindekiler kitaptan silinir
     # taranmışta tek haneli numarayı Tesseract sürümüne göre okuyamayabilir: numarasız kabul, yanlış numara hata
     dogru = ["ÖNSÖZ … 7", "GİRİŞ … 8", "BİRİNCİ BÖLÜM", "KAVRAMLAR … 9", "Kavramın Tanımı … 9",
              "Kavramların Birbirine Göre Durumları ve Beş Tümel", "Meselesi … 11", "İKİNCİ BÖLÜM", "ÖNERMELER … 12",
              "Önermenin Tanımı … 12", "Karşıt Önermeler … 13", "SONUÇ … 14"]
     uygun = len(son) == len(dogru) and all(a == b or (kip == "tarama" and a == b.split(" … ")[0]) for a, b in zip(son, dogru))
-    ok(uygun and sum(" … " in a for a in son) >= 7, f"İçindekiler ({kip}): basılı içindekiler sonda {son}")
+    ok(not any(b["metin"]["tr"].startswith(("ÖNSÖZ …", "SONUÇ …")) for b in bl),
+       f"İçindekiler ({kip}): basılı içindekiler kitaptan silindi")
 _nav = _z.ZipFile(_io.BytesIO(epub.uret(kit, ["tr"]))).read("OEBPS/nav.xhtml").decode()
-ok("Bölüm 001" not in _nav and "Kavramın Tanımı" in _nav, "İçindekilerden fihrist EPUB'da numaralandırılmaz")
+ok("Kavramın Tanımı" not in _nav and _nav.split('epub:type="toc"')[1].split("</nav>")[0].count("<li>") == 1 and 'hidden="hidden"' in _nav,
+   "EPUB'da görünür liste yok (0.5.8): gizli tek bağlantılı toc")
 # Klasik Mantık'ın gerçek biçimi: bozuk başlık, ayrı satırda numaralar, ortada numarasız bölüm başlıkları, OCR hataları
 fixtur_uret.klasik_mantik_pdf(os.path.join(klasor, "km.pdf"))
 kit = kaynak.cevir(os.path.join(klasor, "km.pdf"))
@@ -197,9 +198,9 @@ ok(K.denetle(kit) == [] and kit["kunye"].get("yapi") == "fihrist", "Klasik Mant�
 ok(bas == [("Önsöz", 1), ("GİRİŞ", 1), ("I. Mantık Nedir?", 2), ("II. Tarihsel Bilgi", 2), ("BİRİNCİ BÖLÜM: KAVRAM VE TERİM", 1),
            ("Kavramın tanımı", 2), ("Kavramın özelliği", 2), ("Önerme çeşitleri", 2), ("Yüklemli önermeler", 2),
            ("İKİNCİ BÖLÜM: ÖNERME", 1), ("Önermenin tanımı", 2), ("Karşı olma", 2), ("Kıyas", 2), ("Kıyasın tanımı", 2),
-           ("Kıyasın çeşitleri", 2), ("Döndürme", 2), ("Tümevarım", 2), ("İçindekiler", 1)],
+           ("Kıyasın çeşitleri", 2), ("Döndürme", 2), ("Tümevarım", 2)],
    f"Klasik Mantık biçimi: başlıklar (kitabın yazımıyla), seviyeler, yanlış numara ve OCR hatası {bas}")
-govde_bl = bl[:[b["metin"]["tr"] for b in bl].index("İçindekiler")]
+govde_bl = bl
 ok(any(b["tur"] == "p" and b["metin"]["tr"] == "Düz döndürme:" for b in govde_bl) and
    not any(b["tur"] == "p" and b["metin"]["tr"] in ("KAVRAM VE TERİM", "ÖNERME", "GİRİŞ") for b in govde_bl),
    "Klasik Mantık biçimi: içindekilerde olmayan satır paragraf, başlık satırı tekrar yok")
@@ -238,7 +239,7 @@ _dosyalar = {a: _zip.read(a).decode() for a in _zip.namelist() if a.endswith((".
 for _t in _dosyalar.values():
     _md.parseString(_t.encode())
 _opf = next(v for a, v in _dosyalar.items() if a.endswith(".opf"))
-ok("Aristo'da modal önermeler &amp; &lt;tırnak&gt;" in _dosyalar["OEBPS/nav.xhtml"]
+ok("Aristo'da modal önermeler &amp; &lt;tırnak&gt;" in _dosyalar["OEBPS/metin/bolum_001.xhtml"]
    and "&#x27;" not in re.sub(r'="[^"]*"', "", "".join(_dosyalar.values()))  # metinde; öznitelik (alt) kaçışlı kalır
    and "<dc:title>Aristo'nun Mantığı</dc:title>" in _opf,
    "Kesme işareti kaçışlanmaz (nav, başlık, künye); & ve < kaçışlı; dosyalar geçerli XML")

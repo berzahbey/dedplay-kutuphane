@@ -66,8 +66,8 @@ ok(h.count('epub:type="noteref"') == 2 and h.count('epub:type="footnote"') == 1,
 opf = zipfile.ZipFile(os.path.join(gecici, "osm.epub")).read("OEBPS/content.opf").decode()
 ok('page-progression-direction="rtl"' in opf, "Osmanlıca sağdan sola")
 spine = opf.split("<spine")[1].split("</spine>")[0]
-ok(spine.strip().splitlines()[-1].strip() == '<itemref idref="nav"/>' and spine.index('"kapak"') < spine.index('"b001"'),
-   "okuma sırası: kapak, künye, metin, fihrist en sonda")
+ok('idref="nav"' not in spine and spine.index('"kapak"') < spine.index('"b001"'),
+   "okuma sırası: kapak, künye, metin (0.5.8: fihrist sayfası yok)")
 
 # düzeltme
 ok(K.duzelt(t, "b00002", "tr", "Düzeltilmiş metin {{n0001}}.") and t["bloklar"][1]["elle"]["tr"], "düzeltme kaydı ve 'elle' işareti")

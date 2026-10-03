@@ -318,7 +318,7 @@ async function ayrinti(kid, li) {
   if (d.durum.cikti?.length) epKutu.append(E("p", { class: "meta" }, E("span", {}, "Kitaplar klasöründe: " + d.durum.cikti.join(", "))));
   else if (d.durum.cikti_uyari) epKutu.append(E("p", { class: "uyari" }, d.durum.cikti_uyari));
   kutu.append(epKutu);
-  if (d.ceviri_eksik || d.durum.ceviri) {
+  if (false) {  // 0.5.8: çeviri kaldırıldı
     const c = d.durum.ceviri || {}, eksik = d.ceviri_eksik || { paragraf: 0 };
     const cb = E("div", {}, E("h3", {}, "Türkçe çeviri"));
     const cevirBtn = (sonraStudyo, yazi) => {

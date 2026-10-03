@@ -142,9 +142,114 @@ def _ocr_sayfa(args):
         d = pytesseract.image_to_data(img, lang=dil, config=ayar, output_type=pytesseract.Output.DICT)
     except Exception:
         d = pytesseract.image_to_data(img, config=ayar, output_type=pytesseract.Output.DICT)
+    if not ayar and dil != "ara":
+        _arapca_yeniden_oku(img, d)
     rows = _ocr_satirlari(d, olcek, ayar)
     rows += _kenar_numarasi(img, rows, olcek, dil)
     return i, rows, page.rect.width, page.rect.height
+
+
+_ARAP_HARF = re.compile(r"[\u0621-\u064A\u0671-\u06D3]")
+_PARANTEZ = {"(", ")", "[", "]", "©", "®", "«", "»", "((", "))"}
+_ara_var = None
+
+
+def _ara_modeli_var():
+    global _ara_var
+    if _ara_var is None:
+        try:
+            import pytesseract
+            _ara_var = "ara" in pytesseract.get_languages(config="")
+        except Exception:
+            _ara_var = False
+    return _ara_var
+
+
+def _arapca_yeniden_oku(img, d):
+    """Türkçe kitaptaki Arapça ibare (ayet, hadis; paragraf içinde parantezle de) Türkçe modelle çöpe döner
+    ("( © Öte op» Yİ yas )"). Satırda yan yana duran zayıf kelimeler (güven < 65, harfsiz ya da en çok 2 harfli; en az
+    2 kelime, en az biri güven < 60) kesilip Arapça modelle yeniden okunur. Kabul şartı: kelimelerin çoğu Arapça harfli,
+    en az 4 Arapça harf, Arapça kelimelerin güven ortalaması ≥ 45 ve en az birinin güveni ≥ 80. Kabul edilmezse satır
+    olduğu gibi kalır (soluk basılmış Türkçe kelime Arapça sanılmasın). Kenardaki parantez korunur. d yerinde değişir."""
+    if not _ara_modeli_var():
+        return 0
+    import pytesseract
+    n = len(d["text"])
+    satirlar = {}
+    for k in range(n):
+        if (d["text"][k] or "").strip():
+            satirlar.setdefault((d["block_num"][k], d["par_num"][k], d["line_num"][k]), []).append(k)
+
+    def zayif(k):
+        t, g = d["text"][k].strip(), float(d["conf"][k])
+        harf = sum(c.isalpha() for c in t)
+        return g < 65 or harf == 0 or (harf <= 2 and not t.isdigit())
+
+    degisen = 0
+    for ks in satirlar.values():
+        ks.sort(key=lambda k: d["left"][k])
+        parcalar, cur = [], []
+        for k in ks:
+            if zayif(k):
+                cur.append(k)
+            else:
+                if cur:
+                    parcalar.append(cur)
+                cur = []
+        if cur:
+            parcalar.append(cur)
+        for par in parcalar:
+            ic = [k for k in par if d["text"][k].strip() not in _PARANTEZ]  # kenardaki parantezler kesite girmez
+            while ic and d["text"][ic[0]].strip() in _PARANTEZ:
+                ic.pop(0)
+            if len(ic) < 2 or not any(float(d["conf"][k]) < 60 for k in ic):
+                continue
+            # kesit yalnız Arapça parçanın kendi kelimelerine göre (satırın en yüksek kutusuna göre değil): boşluk
+            # büyük olursa üst/alt satır kesite girer ve okuma bozulur
+            h = st.median(d["height"][k] for k in ic)
+            x0, x1 = min(d["left"][k] for k in ic), max(d["left"][k] + d["width"][k] for k in ic)
+            y0, y1 = min(d["top"][k] for k in ic), max(d["top"][k] + d["height"][k] for k in ic)
+            sy0, sy1 = min(d["top"][k] for k in ks), max(d["top"][k] + d["height"][k] for k in ks)
+            sh = max(d["height"][k] for k in ks)
+            en_iyi = None
+            for kx0, ky0, kx1, ky1 in ((x0 - h // 3, y0 - h // 3, x1 + h // 3, y1 + h // 3),  # dar: parçanın kendisi
+                                       (x0 - h * 0.7, y0 - h * 0.7, x1 + h * 0.7, y1 + h * 0.7),
+                                       (x0 - sh // 2, sy0 - sh // 2, x1 + sh // 2, sy1 + sh // 2)):  # satır boyu
+                # en iyi kesit satırdan satıra değişir (harekeler, üst/alt satıra yakınlık): üçü denenir, en güvenlisi
+                kesit = img.crop((max(0, int(kx0)), max(0, int(ky0)), int(kx1), int(ky1)))
+                try:
+                    a = pytesseract.image_to_data(kesit, lang="ara", config="--psm 7",
+                                                  output_type=pytesseract.Output.DICT)
+                except Exception:
+                    continue
+                kel = [(t.strip(), float(g)) for t, g in zip(a["text"], a["conf"]) if (t or "").strip()]
+                arap = [(t, g) for t, g in kel if _ARAP_HARF.search(t)]
+                harf = sum(len(_ARAP_HARF.findall(t)) for t, _ in arap)
+                if not arap or len(arap) < 0.6 * len(kel) or harf < 4 or \
+                        sum(g for _, g in arap) / len(arap) < 45 or max(g for _, g in arap) < 80:
+                    continue
+                ort = sum(g for _, g in arap) / len(arap)
+                if en_iyi is None or ort > en_iyi[0]:
+                    en_iyi = (ort, arap)
+            if en_iyi is None:
+                continue
+            arap = en_iyi[1]
+            ayet = " ".join(t for t, _ in arap)
+            parantez = any(d["text"][k].strip() in _PARANTEZ for k in par) or \
+                any(d["text"][k].strip() in _PARANTEZ for k in ks if k not in par and abs(ks.index(k) - ks.index(par[0])) <= 1)
+            ilk = par[0]
+            d["text"][ilk] = ("( " + ayet + " )") if parantez else ayet
+            d["conf"][ilk] = 99
+            d["left"][ilk] = min(d["left"][k] for k in par)
+            d["width"][ilk] = max(d["left"][k] + d["width"][k] for k in par) - d["left"][ilk]
+            for k in par[1:]:
+                d["text"][k] = ""
+            for k in ks:  # parçanın hemen dışında kalan tek başına parantez artık metinde
+                if k not in par and d["text"][k].strip() in _PARANTEZ and abs(ks.index(k) - ks.index(par[0])) <= len(par):
+                    if parantez:
+                        d["text"][k] = ""
+            degisen += 1
+    return degisen
 
 
 def _ocr_satirlari(d, olcek, ayar=""):
@@ -1366,18 +1471,7 @@ def pdf_oku(yol, ilerleme=None):
             pass  # boş sayfa: numarası atlanır
         if ilerleme and j % 20 == 0:
             ilerleme(f"Sayfa yapısı: {j + 1}/{len(kalan)}")
-    if toc_sayfalari:  # basılı içindekiler: kitabın sonunda, olduğu gibi (satır satır)
-        ogeler.append({"tur": "baslik", "metin": "İçindekiler", "boy": 0, "seviye": 1, "koru": True})
-        for i in toc_sayfalari:
-            for r in satirlar[i]:
-                t = re.sub(r"\s*(?:\.{2,}|…{2,})[^\s\d]{0,15}\s*(?=\d+\s*$)", " … ", r["text"].strip())  # "BÖLÜM.....u 6" -> "BÖLÜM … 6"
-                m = _TOC_SATIR.match(_rakam(r["text"].strip()))
-                if m and re.search(r"[.…·•_]{2,}", r["text"]):  # "SONUÇ .... eee 8" -> "SONUÇ … 8"
-                    t = _toc_temiz(m.group("t")) + " … " + m.group("n")
-                elif _TOC_NOKTALI.match(t) and not re.search(r"\d\s*$", t):  # numarası okunamamış
-                    t = _toc_temiz(_TOC_NOKTALI.match(t).group("t"))
-                if t and not _icindekiler_basligi(t) and not TS.PAGE_NUM.match(t):
-                    ogeler.append({"tur": "p", "metin": t, "boy": 0, "koru": True})
+    # basılı içindekiler/fihrist sayfaları kitaptan silinir (0.5.8: EPUB'da liste ve içindekiler yok)
     if not yer_imi_modu:
         _sahte_basliklari_ayikla(ogeler)
     _kopuk_paragraflari_birlestir(ogeler)
@@ -1607,9 +1701,7 @@ def epub_oku(yol, ilerleme=None):
     else:
         ogeler = [o for i, o in enumerate(ogeler) if not (o["tur"] == "baslik" and not o.get("fihrist") and
                                                          _NOT_BASLIK.match(o["metin"]))]
-    if toc_satirlari:
-        ogeler.append({"tur": "baslik", "metin": "İçindekiler", "boy": 0, "seviye": 1, "koru": True})
-        ogeler += [{"tur": "p", "metin": t, "boy": 0, "koru": True} for t in toc_satirlari if t]
+    # EPUB'ın içindeki basılı içindekiler/fihrist bölümü kitaptan silinir (0.5.8)
     bilgi = {"baslik": (book.get_metadata("DC", "title") or [[""]])[0][0],
              "yazar": (book.get_metadata("DC", "creator") or [[""]])[0][0], "ocr": 0, "bozuk_katman": False,
              "yapi": "fihrist" if fihrist else None, "kapak_resmi": _epub_kapak(book)}
