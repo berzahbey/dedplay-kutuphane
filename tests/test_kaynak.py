@@ -383,5 +383,28 @@ ok([r["text"] for r in _r] == ["Kur'an'daki ( ومن الأرض ) Arzdan da", "7
                                "BİRİNCİ BÖLÜM", "4 - Su küresi"] and [r["kalin"] for r in _r] == [False, False, True, False],
    "Surya satırları: Arapça korunur, üst simge dipnot işareti, biçim işaretleri atılır")
 
+# Surya karışık satırı (Arapça + Türkçe) sağdan sola dizebiliyor: metin Surya'dan, yer Tesseract'tan (satır görüntüsü)
+from PIL import Image as _Im, ImageDraw as _Dr, ImageFont as _Ft
+_tr = _Ft.truetype(fixtur_uret.SERIF, 34)
+_ar = _Ft.truetype(os.path.join(os.environ.get("FONT_DIR", "/usr/share/fonts/truetype/amiri"), "Amiri-Regular.ttf"), 40)
+
+
+def _satir_resmi(parcalar):
+    im = _Im.new("L", (1500, 70), 255)
+    for x, yazi, arap in parcalar:
+        _Dr.Draw(im).text((x, 10), yazi, font=_ar if arap else _tr, fill=0, direction="rtl" if arap else None,
+                          language="ar" if arap else None)
+    return im
+
+
+ok(kaynak._karisik_satiri_diz("( فليرتقوا في الأسباب: ) Kur'an-ı Kerim'in bir emri olan (", _satir_resmi(
+       [(10, "Kur'an-ı Kerim'in bir emri olan,", False), (690, "( فليرتقوا في الأسباب )", True)]))
+   == "Kur'an-ı Kerim'in bir emri olan ( فليرتقوا في الأسباب )"
+   and kaynak._karisik_satiri_diz("(Fussilet 41/10) «Dört günde (yarattı).» (Fussilet 41/10) ﴿ في أربعة أيام ﴾", _satir_resmi(
+       [(10, "( في أربعة أيام )", True), (330, "«Dört günde (yarattı).» (Fussilet 41/10)", False)]))
+   == "﴿ في أربعة أيام ﴾ «Dört günde (yarattı).» (Fussilet 41/10)"
+   and kaynak._karisik_satiri_diz("Yalnız Türkçe satır.", None) == "Yalnız Türkçe satır.",
+   "Surya karışık satırı: Tesseract konumlarıyla soldan sağa dizilir, tekrar atılır; tek dilli satır aynı")
+
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)

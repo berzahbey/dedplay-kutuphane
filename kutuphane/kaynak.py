@@ -425,12 +425,15 @@ def _surya_hazir():
 _SURYA_DPI = 200
 
 
-def _surya_satirlari(text_lines, olcek):
+def _surya_satirlari(text_lines, olcek, img=None):
     """Surya satırları -> satır yapısı (PDF birimiyle). <sup>(1)</sup> dipnot işareti olur, <b> kalın bilgisi
     başlık tanımaya gider, öteki biçim işaretleri atılır."""
     rows = []
     for satir in text_lines:
         ham = satir.text or ""
+        if img is not None and _AR.search(ham) and _LATIN.search(ham):  # karışık satır: Tesseract konumlarıyla diz
+            x0, y0, x1, y1 = satir.bbox
+            ham = _karisik_satiri_diz(ham, img.crop((max(0, int(x0) - 4), max(0, int(y0) - 4), int(x1) + 4, int(y1) + 4)))
         t = re.sub(r"<sup>\s*[(\[]?\s*(\d{1,3})\s*[)\]]?\s*</sup>", "\ue000\\1\ue001", ham)
         t = html.unescape(re.sub(r"</?[a-zA-Z][^>]*>", "", t))
         t = TS.norm(t).strip()
@@ -442,6 +445,97 @@ def _surya_satirlari(text_lines, olcek):
                      "x1": x1 * olcek, "n": len(t.split()), "kalin": kalin, "blok": 0, "ocr": True})
     rows.sort(key=lambda r: (r["top"], r["x0"]))
     return _satir_parcalarini_birlestir(rows)
+
+
+_AR = re.compile(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]")
+_LATIN = re.compile(r"[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]")
+_AYNA = {"(": ")", ")": "(", "[": "]", "]": "[", "«": "»", "»": "«", "﴿": "﴾", "﴾": "﴿"}
+
+
+_AR_PARCA = re.compile(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF\u064B-\u065F﴿﴾]"
+                       r"(?:[\s\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF\u064B-\u065F﴿﴾:.]*"
+                       r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF\u064B-\u065F﴿﴾])?")
+
+
+def _karisik_satiri_diz(metin, kesit=None):
+    """Surya, Arapça ile Türkçenin aynı satırda olduğu satırı sağdan sola dizebiliyor ("( فليرتقوا … ) Kur'an-ı
+    Kerim'in bir emri olan (") ve kelime kutuları da güvenilmez. Metin Surya'dan, yer Tesseract'tan: satırın görüntüsü
+    (kesit) Türkçe okunur, her Türkçe parça ilk kelimeleriyle Tesseract kelimesine eşlenip yeri bulunur; Arapça parça
+    Tesseract'ın eşleşmeyen (okuyamadığı) bölgesine konur. Parçalar soldan sağa dizilir, Arapça parça parantez içine
+    alınır, kenarda ters kalmış parantez/noktalama ve satır içi tekrar ("(Fussilet 41/10)" iki kez) atılır. Bir parçanın
+    yeri bulunamazsa satıra dokunulmaz."""
+    if kesit is None or not (_AR.search(metin) and _LATIN.search(metin)):
+        return metin
+    import difflib
+    import pytesseract
+    parcalar, son = [], 0  # (tür, yazı)
+    for m in _AR_PARCA.finditer(metin):
+        if not _AR.search(m.group()):
+            continue
+        if metin[son:m.start()].strip():
+            parcalar.append(("L", metin[son:m.start()]))
+        parcalar.append(("A", m.group()))
+        son = m.end()
+    if metin[son:].strip():
+        parcalar.append(("L", metin[son:]))
+    if not any(t == "A" for t, _ in parcalar):
+        return metin
+    try:
+        d = pytesseract.image_to_data(kesit, lang="tur", config="--psm 7", output_type=pytesseract.Output.DICT)
+    except Exception:
+        return metin
+    tk = [(d["left"][k], (d["text"][k] or "").strip()) for k in range(len(d["text"])) if (d["text"][k] or "").strip()]
+    sade = lambda w: re.sub(r"[^\wçğıöşüâîû]", "", w.lower())
+    eslesen, yer = set(), []
+    parcalar = [(t, y) for t, y in parcalar if t == "A" or re.search(r"[^\W\d_]{2}", y)]  # yalnız işaret: at
+    for tur, yazi in parcalar:
+        if tur == "A":
+            yer.append(None)
+            continue
+        adaylar = []
+        for w in [w for w in yazi.split() if len(sade(w)) >= 2]:
+            for k, (x, t) in enumerate(tk):
+                if k not in eslesen and len(sade(t)) >= 2 and difflib.SequenceMatcher(None, sade(w), sade(t)).ratio() >= 0.75:
+                    adaylar.append((x, k))
+                    break
+        if not adaylar:
+            return metin  # Türkçe parçanın yeri bulunamadı: dokunma
+        eslesen.update(k for _, k in adaylar)
+        yer.append(min(x for x, _ in adaylar))
+    bos = [x for k, (x, t) in enumerate(tk) if k not in eslesen]
+    for n, (tur, _) in enumerate(parcalar):
+        if tur == "A":
+            if not bos:
+                return metin
+            yer[n] = st.median(bos)
+    sirali = [p for _, p in sorted(zip(yer, parcalar), key=lambda z: z[0])]
+    out = []
+    for tur, yazi in sirali:
+        yazi = yazi.strip()
+        if tur == "A":
+            ic = re.sub(r"[()﴿﴾]", " ", yazi).strip(" :.،")  # kenardaki Arapça virgül ve içteki fazla parantez
+            ic = re.sub(r"\s+", " ", ic)
+            out.append(("﴿ " + ic + " ﴾") if "﴿" in yazi or "﴾" in yazi else ("( " + ic + " )"))
+        else:
+            yazi = yazi.replace("،", ",")
+            for tekrar in set(re.findall(r"\([^()]{2,40}\)", yazi)):  # satır içi tekrar: sonuncusu kalır
+                while yazi.count(tekrar) > 1:
+                    yazi = yazi.replace(tekrar, "", 1).strip()
+            # sağdan sola dizilmenin kenara attığı işaretler: baştaki nokta cümle sonudur (sona), öteki baştaki işaret
+            # ve sondaki "(" atılır; eşi olmayan "»" sondan başa "«" olur
+            bas = re.match(r"^[\s:.,;)]*", yazi).group()
+            yazi = yazi[len(bas):].rstrip(" (")
+            if "." in bas and not yazi.endswith((".", "»", ")")):
+                yazi += "."
+            if yazi.endswith("»") and "«" not in yazi:
+                yazi = "«" + yazi[:-1].rstrip()
+            if yazi.count("(") > yazi.count(")") and yazi.startswith("("):
+                yazi = yazi[1:].lstrip()
+            elif yazi.count(")") > yazi.count("("):  # ".melekleri)dir (" -> "(melekleri)dir"
+                yazi = "(" + yazi
+            if yazi:
+                out.append(yazi)
+    return re.sub(r"\s+", " ", " ".join(out)).strip()
 
 
 def _surya_sayfalar(yol, sayfalar, ilerleme=None, grup=4):
@@ -465,7 +559,8 @@ def _surya_sayfalar(yol, sayfalar, ilerleme=None, grup=4):
                 resimler.append(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
             sonuc = rec(resimler, det_predictor=det, sort_lines=True, math_mode=False)
             for i, s in zip(parca, sonuc):
-                out[i] = (_surya_satirlari(s.text_lines, olcek), doc[i].rect.width, doc[i].rect.height)
+                out[i] = (_surya_satirlari(s.text_lines, olcek, resimler[parca.index(i)]), doc[i].rect.width,
+                          doc[i].rect.height)
         except Exception as e:
             print(f"Surya {parca} sayfalarında hata, Tesseract'a kalıyor: {type(e).__name__}: {e}")
         if ilerleme:
