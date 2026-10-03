@@ -13,6 +13,11 @@ RUN python -c "import zipfile; zipfile.ZipFile('/tmp/epubcheck.zip').extractall(
 ENV PYTHONUNBUFFERED=1 DATA_DIR=/data EPUBCHECK=/opt/epubcheck-5.4.0/epubcheck.jar \
     FONT_DIR=/usr/share/fonts/truetype/amiri
 WORKDIR /app
+# OCR motoru: Surya 0.14.7 (Türkçe ve Arapçayı aynı satırda okur; işlemcide çalışır). torch/torchvision işlemci
+# sürümü ve birbiriyle uyumlu olmalı: Surya'dan sonra ikisi birlikte işlemci deposundan yeniden kurulur.
+RUN pip install --no-cache-dir "surya-ocr==0.14.7" "pillow<11" \
+    && pip install --no-cache-dir --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cpu
+ENV OCR_MOTORU=surya MODEL_CACHE_DIR=/data/modeller/surya TORCH_DEVICE=cpu
 COPY kutuphane ./kutuphane
 EXPOSE 8000
 CMD ["uvicorn", "kutuphane.main:app", "--host", "0.0.0.0", "--port", "8000"]

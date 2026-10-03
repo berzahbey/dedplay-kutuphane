@@ -372,5 +372,16 @@ ok([o["metin"] for o in _og] == ["akla hayâle gelmeyen bu ni'met- leri, siz iyi
                                  "a) Hor zaman için unutmamak,", "b) İnsanlara iştirak etmemek."],
    "Kopuk paragraf birleşir, liste maddeleri ayrı kalır")
 
+# Surya satırları (sahte sonuçla; Surya kurulu olmasa da): Arapça korunur, <sup>(1)</sup> dipnot işareti olur,
+# <math>/<b> atılır, kalınlık satırın çoğu kalınsa sayılır
+from types import SimpleNamespace as _N
+_r = kaynak._surya_satirlari([_N(text="Kur'an'daki ( ومن الأرض ) <b>Arzdan da</b>", bbox=[100, 200, 900, 240]),
+                              _N(text="7 - Yüksek varlıklar.<sup>(1)</sup>", bbox=[100, 260, 600, 300]),
+                              _N(text="<b>BİRİNCİ BÖLÜM</b>", bbox=[300, 320, 600, 360]),
+                              _N(text="<math>4 - Su</math> küresi", bbox=[100, 380, 600, 420])], 72 / 200)
+ok([r["text"] for r in _r] == ["Kur'an'daki ( ومن الأرض ) Arzdan da", "7 - Yüksek varlıklar.\ue0001\ue001",
+                               "BİRİNCİ BÖLÜM", "4 - Su küresi"] and [r["kalin"] for r in _r] == [False, False, True, False],
+   "Surya satırları: Arapça korunur, üst simge dipnot işareti, biçim işaretleri atılır")
+
 print("SONUC:", "HEPSI GECTI" if all(BASARI) else f"{BASARI.count(False)} TEST KALDI")
 sys.exit(0 if all(BASARI) else 1)

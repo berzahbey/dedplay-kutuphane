@@ -12,6 +12,7 @@ import collections
 import hashlib
 import io
 import os
+import html
 import re
 import statistics as st
 import unicodedata
@@ -338,8 +339,8 @@ def pdf_sayfalari(yol, ilerleme=None):
             rows = _katman_satirlari(page)
         except Exception:
             rows = []
-        if sum(_harf(r["text"]) for r in rows) < 40:
-            ocr.append(i)
+        if sum(_harf(r["text"]) for r in rows) < 40 or (_ocr_motoru() == "surya" and _katman_kotu(rows)):
+            ocr.append(i)  # metin katmanı yok ya da kötü (eski OCR): sayfa yeniden okunur
         else:
             sayfalar[i] = (rows, page.rect.width, page.rect.height, False)
     bilgi = {"sayfa": n, "ocr": 0, "bozuk_katman": False}
@@ -350,11 +351,19 @@ def pdf_sayfalari(yol, ilerleme=None):
     if ocr:
         bilgi["ocr"] = len(ocr)
         dil = os.environ.get("OCR_LANG", "tur")
-        with ProcessPoolExecutor(max_workers=max(1, os.cpu_count() or 1)) as ex:
-            for k, (i, rows, w, h) in enumerate(ex.map(_ocr_sayfa, [(yol, i, dil) for i in ocr], chunksize=1)):
+        kalan_ocr = ocr
+        if _ocr_motoru() == "surya":
+            okunan = _surya_sayfalar(yol, ocr, ilerleme)
+            for i, (rows, w, h) in okunan.items():
                 sayfalar[i] = (rows, w, h, True)
-                if ilerleme:
-                    ilerleme(f"OCR: sayfa {k + 1}/{len(ocr)}")
+            kalan_ocr = [i for i in ocr if i not in okunan]  # Surya yoksa ya da hata verdiyse: Tesseract
+            bilgi["ocr_motoru"] = "surya" if okunan else "tesseract"
+        if kalan_ocr:
+            with ProcessPoolExecutor(max_workers=max(1, os.cpu_count() or 1)) as ex:
+                for k, (i, rows, w, h) in enumerate(ex.map(_ocr_sayfa, [(yol, i, dil) for i in kalan_ocr], chunksize=1)):
+                    sayfalar[i] = (rows, w, h, True)
+                    if ilerleme:
+                        ilerleme(f"OCR: sayfa {k + 1}/{len(kalan_ocr)}")
     sayfalar, kaynak = _cift_sayfalari_bol(sayfalar)
     bilgi["kaynak_sayfa"] = kaynak  # her sayfa için (PDF'teki sırası, yarısı: None tek sayfa / 0 ilk / 1 ikinci)
     bilgi["cift_sayfa"] = sum(1 for _, y in kaynak if y == 0)
@@ -371,6 +380,97 @@ def pdf_sayfalari(yol, ilerleme=None):
     bilgi["baslik"] = (meta.get("title") or "").strip()
     bilgi["yazar"] = (meta.get("author") or "").strip()
     return sayfalar, bilgi
+
+
+def _ocr_motoru():
+    """OCR_MOTORU: "surya" (varsayılan; Türkçe ve Arapçayı aynı satırda okur) ya da "tesseract"."""
+    return os.environ.get("OCR_MOTORU", "surya").strip().lower()
+
+
+def _katman_kotu(rows):
+    """Metin katmanı eski ve kötü bir OCR'dan mı ("tarafmdan", "hir", "varhk"): küçük harfle başlayan kelimelerin
+    %30'undan fazlası Zemberek'e göre geçersiz (en az 30 kelime)."""
+    kel = re.findall(r"(?<![\w'’])[a-zçğıöşüâîû][a-zçğıöşüâîû]{2,}(?![\w])", " ".join(r["text"] for r in rows))
+    if len(kel) < 30:
+        return False
+    try:
+        gecersiz = sum(1 for k in kel if not DZ.gecerli_mi(k))
+    except Exception:
+        return False
+    return gecersiz > 0.3 * len(kel)
+
+
+_surya = None
+
+
+def _surya_hazir():
+    """Surya modelleri (bir kez yüklenir). Surya kurulu değilse ya da yüklenemezse None."""
+    global _surya
+    if _surya is None:
+        try:
+            if os.path.isdir("/data"):
+                os.environ.setdefault("MODEL_CACHE_DIR", "/data/modeller/surya")  # modeller kalıcı klasörde
+            os.environ.setdefault("TORCH_DEVICE", "cpu")
+            import torch
+            torch.set_num_threads(max(1, os.cpu_count() or 1))
+            from surya.detection import DetectionPredictor
+            from surya.recognition import RecognitionPredictor
+            _surya = (RecognitionPredictor(), DetectionPredictor())
+        except Exception as e:
+            print(f"Surya yüklenemedi, Tesseract kullanılacak: {type(e).__name__}: {e}")
+            _surya = False
+    return _surya or None
+
+
+_SURYA_DPI = 200
+
+
+def _surya_satirlari(text_lines, olcek):
+    """Surya satırları -> satır yapısı (PDF birimiyle). <sup>(1)</sup> dipnot işareti olur, <b> kalın bilgisi
+    başlık tanımaya gider, öteki biçim işaretleri atılır."""
+    rows = []
+    for satir in text_lines:
+        ham = satir.text or ""
+        t = re.sub(r"<sup>\s*[(\[]?\s*(\d{1,3})\s*[)\]]?\s*</sup>", "\ue000\\1\ue001", ham)
+        t = html.unescape(re.sub(r"</?[a-zA-Z][^>]*>", "", t))
+        t = TS.norm(t).strip()
+        if not t:
+            continue
+        x0, y0, x1, y1 = satir.bbox
+        kalin = sum(len(m) for m in re.findall(r"<b>(.*?)</b>", ham)) >= 0.8 * len(re.sub(r"<[^>]+>", "", ham))
+        rows.append({"text": t, "h": (y1 - y0) * olcek, "top": y0 * olcek, "bot": y1 * olcek, "x0": x0 * olcek,
+                     "x1": x1 * olcek, "n": len(t.split()), "kalin": kalin, "blok": 0, "ocr": True})
+    rows.sort(key=lambda r: (r["top"], r["x0"]))
+    return _satir_parcalarini_birlestir(rows)
+
+
+def _surya_sayfalar(yol, sayfalar, ilerleme=None, grup=4):
+    """Sayfaları Surya ile okur (tek süreçte, dörder sayfa). {sayfa: (satırlar, genişlik, yükseklik)}; okunamayan
+    sayfa sonuçta yer almaz (Tesseract'a kalır)."""
+    model = _surya_hazir()
+    if not model or not sayfalar:
+        return {}
+    import fitz
+    from PIL import Image
+    rec, det = model
+    doc = fitz.open(yol)
+    olcek = 72 / _SURYA_DPI
+    out = {}
+    for k in range(0, len(sayfalar), grup):
+        parca = sayfalar[k:k + grup]
+        try:
+            resimler = []
+            for i in parca:
+                pix = doc[i].get_pixmap(dpi=_SURYA_DPI)
+                resimler.append(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
+            sonuc = rec(resimler, det_predictor=det, sort_lines=True, math_mode=False)
+            for i, s in zip(parca, sonuc):
+                out[i] = (_surya_satirlari(s.text_lines, olcek), doc[i].rect.width, doc[i].rect.height)
+        except Exception as e:
+            print(f"Surya {parca} sayfalarında hata, Tesseract'a kalıyor: {type(e).__name__}: {e}")
+        if ilerleme:
+            ilerleme(f"OCR (Surya): sayfa {min(k + grup, len(sayfalar))}/{len(sayfalar)}")
+    return out
 
 
 def _cilt_arasi(rows, w, h):

@@ -1,4 +1,7 @@
 """Deneme kitapları: gerçek Türkçe kitaplardaki sorunları taşıyan PDF'ler (metin katmanlı, taranmış, bozuk katmanlı)."""
+import os
+os.environ["OCR_MOTORU"] = "tesseract"  # testler hızlı ve tekrarlanabilir: Tesseract (imajdaki surya ayarını ezer)
+
 import fitz  # PyMuPDF
 
 import os
