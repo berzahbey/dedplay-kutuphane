@@ -436,18 +436,30 @@ def _surya_satirlari(text_lines, olcek, img=None):
             ham = _karisik_satiri_diz(ham, img.crop((max(0, int(x0) - 4), max(0, int(y0) - 4), int(x1) + 4, int(y1) + 4)))
         t = re.sub(r"<sup>\s*[(\[]?\s*(\d{1,3})\s*[)\]]?\s*</sup>", "\ue000\\1\ue001", ham)
         t = html.unescape(re.sub(r"</?[a-zA-Z][^>]*>", "", t))
-        t = _surya_harfleri(TS.norm(t)).strip()
+        t = _tekrari_at(_surya_harfleri(TS.norm(t)).strip())
         if not t:
             continue
         x0, y0, x1, y1 = satir.bbox
         kalin = sum(len(m) for m in re.findall(r"<b>(.*?)</b>", ham)) >= 0.8 * len(re.sub(r"<[^>]+>", "", ham))
         rows.append({"text": t, "h": (y1 - y0) * olcek, "top": y0 * olcek, "bot": y1 * olcek, "x0": x0 * olcek,
                      "x1": x1 * olcek, "n": len(t.split()), "kalin": kalin, "blok": 0, "ocr": True})
-    if any(_CJK.search(r["text"]) for r in rows):
-        # Surya boş/lekeli sayfada metin uydurabiliyor ("不可 province.", "Contract"): o sayfada Çince/Japonca harfli
-        # satırlar ve Arapçasız, kelimelerinin yarısı bile geçerli olmayan satırlar atılır
-        rows = [r for r in rows if not _CJK.search(r["text"]) and (_AR.search(r["text"]) or _gecerli_oran(r["text"]) >= 0.5)]
+    cjk = [r for r in rows if _CJK.search(r["text"])]
+    if cjk:
+        # Surya boş/lekeli bölgede metin uydurabiliyor ("不可 province.", "Contract"): Çince/Japonca harfli satırlar ve
+        # uydurma bölgesindeki (ilk Çince satırın biraz üstünden aşağısı) Arapçasız, kelimelerinin yarısı bile geçerli
+        # olmayan satırlar atılır; bölgenin üstündeki gerçek satırlar ("1. KITAP") kalır (0.5.13)
+        sinir = min(r["top"] for r in cjk) - 2 * max(r["h"] for r in cjk)
+        rows = [r for r in rows if not _CJK.search(r["text"]) and
+                (r["bot"] < sinir or _AR.search(r["text"]) or _gecerli_oran(r["text"]) >= 0.5)]
+    elif rows and len(rows) <= 3 and sum(_harf(r["text"]) for r in rows) < 40 and \
+            not any(_AR.search(r["text"]) or re.fullmatch(r"\W*\d{1,4}\W*", r["text"]) for r in rows) and (
+            not any(_gecerli_oran(r["text"]) >= 0.5 for r in rows) or
+            (sum(_harf(r["text"]) for r in rows) < 15 and not any(r["text"].isupper() for r in rows))):
+        # boş sayfada uydurma ("Carl"): Arapçası, sayfa numarası olmayan birkaç kısa satır; ya geçerli kelimesi yok ya da
+        # tamamı 15 harften az ve büyük harfli başlık değil
+        rows = []
     rows = _surya_kucuk_parcalar(rows)
+    rows = _surya_ayni_satir(rows)
     rows.sort(key=lambda r: (r["top"], r["x0"]))
     return _satir_parcalarini_birlestir(rows)
 
@@ -528,6 +540,54 @@ def _surya_kucuk_parcalar(rows):
     return out
 
 
+# 0.5.13: Surya'ya özel kurallar
+def _tekrari_at(t):
+    """Surya bazen satırın bir bölümünü iki kez yazıyor ("senelerinde İstanbul'da basılan ( … senelerinde İstanbul'da
+    basılan ("): 3 ya da daha çok kelimelik dizinin ikinci geçişi atılır."""
+    k = t.split()
+    for n in range(min(8, len(k) // 2), 2, -1):
+        for i in range(len(k) - 2 * n + 1):
+            for j in range(i + n, len(k) - n + 1):
+                if k[i:i + n] == k[j:j + n] and _LATIN.search(" ".join(k[i:i + n])):
+                    return _tekrari_at(" ".join(k[:j] + k[j + n:]))
+    return t
+
+
+def _surya_ayni_satir(rows):
+    """Surya aynı satırdaki Arapça ibareyi ve Türkçeyi ayrı satır verebiliyor; Arapça satır yüksek olduğu için
+    _satir_parcalarini_birlestir onları birleştirmez ve yukarıdan aşağı sıralamada Arapça öne geçer ("( … )" +
+    "olsun) : Allah'ın Resûlü"). Biri Arapçalıysa, dikey ortası ötekinin içinde ve aradaki boşluk bir satır
+    yüksekliğinden azsa soldan sağa birleşir (iki sütunlu sayfada sütunlar arası daha geniştir)."""
+    out = [dict(r) for r in rows]
+    degisti = True
+    while degisti:
+        degisti = False
+        for a in out:
+            for b in out:
+                if b is a or not (_AR.search(a["text"]) or _AR.search(b["text"])):
+                    continue
+                if _AR.search(a["text"]) and _AR.search(b["text"]) and not (_LATIN.search(a["text"]) or _LATIN.search(b["text"])):
+                    continue
+                ya, yb = (a["top"] + a["bot"]) / 2, (b["top"] + b["bot"]) / 2
+                if not (b["top"] <= ya <= b["bot"] or a["top"] <= yb <= a["bot"]):
+                    continue
+                sol, sag = (a, b) if a["x0"] <= b["x0"] else (b, a)
+                if not (-2 <= sag["x0"] - sol["x1"] <= max(a["h"], b["h"])):
+                    continue
+                sol["text"] = sol["text"].rstrip() + " " + sag["text"].lstrip()
+                sol["x1"] = max(sol["x1"], sag["x1"])
+                sol["top"], sol["bot"] = min(a["top"], b["top"]), max(a["bot"], b["bot"])
+                sol["h"] = max(a["h"], b["h"])
+                sol["n"] = len(sol["text"].split())
+                sol["kalin"] = a["kalin"] and b["kalin"]
+                out.remove(sag)
+                degisti = True
+                break
+            if degisti:
+                break
+    return out
+
+
 def _harfli_madde_basligi(t):
     """"A — ZAMAN", "C - RIZIK MESELESİ", "B — İRTİKÂ (Yücelme) TABİRİ": harfle numaralanmış, büyük harfli ara başlık."""
     t = SAYFA_ISARET.sub("", t).strip()
@@ -572,6 +632,7 @@ def _karisik_satiri_diz(metin, kesit=None):
     except Exception:
         return metin
     tk = [(d["left"][k], (d["text"][k] or "").strip()) for k in range(len(d["text"])) if (d["text"][k] or "").strip()]
+    gen = [d["width"][k] for k in range(len(d["text"])) if (d["text"][k] or "").strip()]
     sade = lambda w: re.sub(r"[^\wçğıöşüâîû]", "", w.lower())
     eslesen, yer = set(), []
     parcalar = [(t, y) for t, y in parcalar if t == "A" or re.search(r"[^\W\d_]{2}", y)]  # yalnız işaret: at
@@ -590,6 +651,29 @@ def _karisik_satiri_diz(metin, kesit=None):
         eslesen.update(k for _, k in adaylar)
         yer.append(min(x for x, _ in adaylar))
     bos = [x for k, (x, t) in enumerate(tk) if k not in eslesen]
+    if sum(1 for t, _ in parcalar if t == "A") == 1 and eslesen:
+        # 0.5.13: tek Arapça parça. Tesseract'ın okuyamadığı kelimeler Türkçenin arasında da kalabilir (ortancayı
+        # yanıltır): önce Türkçe kelimelerin kapladığı yerin DIŞINDAKİ eşleşmeyen kelimeler; hiç yoksa satırın
+        # mürekkepli kısmında Türkçenin boş bıraktığı en geniş bölge
+        dolu = sorted((tk[k][0], tk[k][0] + gen[k]) for k in eslesen)
+        disarda = [x for k, (x, t) in enumerate(tk) if k not in eslesen and not any(a - 2 <= x <= b for a, b in dolu)]
+        if disarda:
+            bos = disarda
+        else:
+            try:
+                kutu = kesit.convert("L").point(lambda v: 255 if v < 128 else 0).getbbox()
+            except Exception:
+                kutu = None
+            sol_kenar, sag_kenar = (kutu[0], kutu[2]) if kutu else (0, getattr(kesit, "width", 0))
+            aralik, bas = [], sol_kenar
+            for a, b in dolu:
+                if a > bas:
+                    aralik.append((a - bas, (bas + a) / 2))
+                bas = max(bas, b)
+            if sag_kenar > bas:
+                aralik.append((sag_kenar - bas, (bas + sag_kenar) / 2))
+            if aralik:
+                bos = [max(aralik)[1]]
     for n, (tur, _) in enumerate(parcalar):
         if tur == "A":
             if not bos:
@@ -612,6 +696,8 @@ def _karisik_satiri_diz(metin, kesit=None):
             # ve sondaki "(" atılır; eşi olmayan "»" sondan başa "«" olur
             bas = re.match(r"^[\s:.,;)]*", yazi).group()
             yazi = yazi[len(bas):].rstrip(" (")
+            if re.match(r"^-[^\W\d_]", yazi) and not yazi.endswith("-"):  # ters dizilmiş satır sonu tiresi: "-diye … tanın"
+                yazi = yazi[1:] + "-"
             if "." in bas and not yazi.endswith((".", "»", ")")):
                 yazi += "."
             if yazi.endswith("»") and "«" not in yazi:
@@ -935,6 +1021,9 @@ def _baslik_mi(r, govde, genislik, kalin_oran):
     harfler = [c for c in t if c.isalpha()]
     if bool(harfler) and all(c.isupper() for c in harfler) and len(t) <= 50 and ortada:
         return True
+    if r.get("ocr") and len(harfler) >= 8 and all(c.isupper() for c in harfler) and 2 <= len(t.split()) <= 6 and \
+            len(t) <= 50 and not t.endswith(END_PUNCT) and not _AR.search(t):
+        return True  # 0.5.13: "RÜYÂDA GÖRÜLMESİ" (iki satırlı başlığın ikinci satırı, ortalanmamış)
     # OCR: iki yandan da içeride, ortalanmış, noktayla bitmeyen kısa satır
     return bool(r.get("ocr")) and ortada and r["x0"] > genislik * 0.25 and len(t) <= 70 and not t.endswith(END_PUNCT) \
         and r["h"] >= govde * 1.1 and not arapcali
@@ -996,13 +1085,15 @@ def _sayfa_paragraflari(rows, genislik, govde, kalin_oran, bas_ayri=False):
         baslik = _baslik_mi(r, govde, genislik, kalin_oran)
         yeni = True
         if onceki is not None and cur:
-            if baslik and cur[0][0] == "b" and r["top"] - onceki["top"] < aralik * 2.2 and abs(r["h"] - onceki["h"]) < 0.5:
+            if baslik and cur[0][0] == "b" and r["top"] - onceki["top"] < aralik * 2.2 and \
+                    abs(r["h"] - onceki["h"]) < (govde * 0.3 if r.get("ocr") else 0.5) and \
+                    not (r.get("ocr") and BOLUM_NO.match(onceki["text"].strip())):
                 yeni = False  # iki satıra bölünmüş başlık
             elif not baslik and cur[0][0] == "p":
                 girinti = r["x0"] > sol + govde * 0.6
                 bosluk = r["top"] - onceki["top"] > aralik * 1.55
                 kisa_son = onceki["text"].endswith(END_PUNCT) and onceki["x1"] < sag - govde * 2.5
-                madde = re.match(r"^\d{1,3}[.)]\s", r["text"])
+                madde = re.match(r"^\d{1,3}(?:[.)]|\s?[—–-])\s", r["text"])  # "3) ", "4 — " (0.5.13)
                 yeni = girinti or bosluk or kisa_son or bool(madde)
         if yeni and cur:
             out.append(cur)
@@ -1101,8 +1192,13 @@ def _notlari_bol(dip_paras):
             parca = parca.strip()
             if not parca:
                 continue
-            m = re.match(r"^(\d{1,3})[\s.)]+(.*)$", parca, re.S) or re.match(r"^[(\[](\d{1,3})[)\]]\s*(.*)$", parca, re.S)
-            if m:
+            m_par = re.match(r"^[(\[](\d{1,3})[)\]]\s*(.*)$", parca, re.S)
+            m = m_par or re.match(r"^(\d{1,3})[\s.)]+(.*)$", parca, re.S)
+            onceki = out[-1][0] if out else None
+            # 0.5.13: dipnot içindeki sayı ("zamanımızdan 850 sene evvel") yeni dipnot değildir: çıplak sayı ancak
+            # sıradaki numaraysa, parantezli numara önceki numaradan biraz büyükse yeni dipnot sayılır
+            if m and (onceki is None or int(m.group(1)) == onceki + 1 or
+                      (m_par and onceki < int(m.group(1)) <= onceki + 3)):
                 out.append((int(m.group(1)), m.group(2).strip()))
             elif out:
                 out[-1] = (out[-1][0], out[-1][1] + " " + parca)
@@ -2358,6 +2454,7 @@ def _duzelt(metinler):
     for p in metinler:
         p = DZ.satir_ici_ust_bilgileri_sil(p, basliklar)
         p = DZ.cop_isaretleri_sil(p)
+        p = re.sub(r"(?<=[^\W\d_])-\s*(\ue002[^\ue003]{1,20}\ue003)\s*(?=[a-zçğıöşüâîû])", r"\1", p)  # 0.5.13
         p = DZ.satir_ici_tireleri_birlestir(p)
         if hasattr(DZ, "bolunmus_kelimeleri_birlestir"):  # "oldu ğundan" -> "olduğundan" (Stüdyo'nun onarımı)
             p = DZ.bolunmus_kelimeleri_birlestir(p)
