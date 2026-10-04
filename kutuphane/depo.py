@@ -25,7 +25,9 @@ VERI = os.environ.get("DATA_DIR", "/data")
 KITAPLAR = os.path.join(VERI, "kitaplar")
 KIMLIK = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
 DIL_AD = {"ar": "arapca", "en": "ingilizce", "fr": "fransizca", "fa": "farsca"}
-_kuyruk = queue.Queue()
+_kuyruk = queue.Queue()  # hafif şerit (0.5.17): EPUB/DOCX/TXT, katmanlı ya da önbellekteki PDF, Osmanlıca, EPUB işleri
+_kuyruk_agir = queue.Queue()  # ağır şerit: OCR gerektiren PDF'ler, birer birer (Surya bütün işlemciyi kullanır)
+_is_kilitleri = {}  # aynı kitabın iki işi aynı anda çalışmasın
 _kilit = threading.Lock()
 _kitap_kilitleri = {}
 _bekleyen_epub = set()  # kuyrukta bekleyen EPUB işleri: art arda düzeltmelerde tek iş
@@ -202,9 +204,42 @@ def durum_asama(kid, mesaj):
     durum_yaz(kid, asama=mesaj)
 
 
-def isci():
+def _is_kilidi(kid):
+    with _kilit:
+        return _is_kilitleri.setdefault(kid, threading.Lock())
+
+
+def isci(agir=False):
+    """0.5.17: iki şerit. Hafif şerit, OCR gerektiren dosya işini ağır şeride devreder. Aynı kitabın iki işi aynı anda
+    çalışmaz: kitabın işi ağır şeritte sürerken gelen hafif iş ağır şeridin arkasına geçer."""
+    kuyruk = _kuyruk_agir if agir else _kuyruk
     while True:
-        tur, kid, arg = _kuyruk.get()
+        tur, kid, arg = kuyruk.get()
+        try:
+            if not agir and tur == "dosya":
+                durum_asama(kid, "Dosya inceleniyor")
+                if kaynak.ocr_gerekir(arg):
+                    durum_yaz(kid, asama="OCR sırasında")
+                    _kuyruk_agir.put((tur, kid, arg))
+                    continue
+            kilit = _is_kilidi(kid)
+            if not agir and not kilit.acquire(blocking=False):
+                # bu kitabın işi ağır şeritte sürüyor (hafif şerit tek iş parçacığı): iş ağır şeridin arkasına geçer,
+                # hafif şerit beklemez ve dönüp durmaz
+                _kuyruk_agir.put((tur, kid, arg))
+                continue
+            if agir:
+                kilit.acquire()  # hafif şeritteki kısa iş bitene kadar bekler
+            try:
+                _isle(tur, kid, arg)
+            finally:
+                kilit.release()
+        finally:
+            kuyruk.task_done()
+
+
+def _isle(tur, kid, arg):
+    if True:
         with _kilit:
             _bekleyen_epub.discard(kid)
         try:
@@ -235,8 +270,6 @@ def isci():
         except Exception as e:
             traceback.print_exc()
             durum_yaz(kid, asama="hata", hata=f"{type(e).__name__}: {e}")
-        finally:
-            _kuyruk.task_done()
 
 
 OTOMATIK_CEVIRI = False  # 0.5.8: çeviri kaldırıldı (Translate yok)
@@ -308,18 +341,24 @@ def is_ekle(is_turu, kid, arg=None, **durum):
             return  # zaten kuyrukta: tek sefer üretilir
         if is_turu == "epub":
             _bekleyen_epub.add(kid)
-    durum_yaz(kid, asama="sırada", hata=None, **durum)
+    # 0.5.17: yazı işi söyler (Türkçe EPUB hazırken "sırada" yanıltıcıydı); işin türü yeniden başlatma için saklanır
+    yazi = {"osmanlica": "Osmanlıca sırada", "epub": "EPUB sırada", "kunye": "EPUB sırada"}.get(is_turu, "sırada")
+    durum_yaz(kid, asama=yazi, hata=None, is_turu=is_turu, is_arg=arg, **durum)
     _kuyruk.put((is_turu, kid, arg))
 
 
 def baslat():
-    threading.Thread(target=isci, daemon=True, name="kutuphane-isci").start()
+    threading.Thread(target=isci, daemon=True, name="kutuphane-hafif").start()
+    threading.Thread(target=isci, args=(True,), daemon=True, name="kutuphane-agir").start()
     # 0.5.8: çeviri kaldırıldı; çeviri izleyicisi başlatılmaz
     # yeniden başlatmada yarım kalan işler kuyruğa geri alınır
     for k in liste():
         if k.get("asama") not in (None, "hazır", "hata"):
             d = durum_oku(k["kimlik"])
-            is_ekle(d.get("tur", "epub"), k["kimlik"], d.get("kaynak_kimlik"))
+            if d.get("is_turu"):  # 0.5.17: yarım kalan işin kendisi (Osmanlıca işi "epub" diye geri alınıyordu)
+                is_ekle(d["is_turu"], k["kimlik"], d.get("is_arg"))
+            else:
+                is_ekle(d.get("tur", "epub"), k["kimlik"], d.get("kaynak_kimlik"))
 
 
 def sil(kid):

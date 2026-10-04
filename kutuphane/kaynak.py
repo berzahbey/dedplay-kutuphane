@@ -27,6 +27,19 @@ try:  # Stüdyo'nun kodu (imajda /app/app)
 except ImportError:  # pragma: no cover
     DZ = TS = None
 
+if DZ is not None and not getattr(DZ.gecerli_mi, "_kilitli", False):
+    # 0.5.17: iki iş şeridi Zemberek'i aynı anda kullanabilir; çözümleyici iş parçacığı güvenli değil. Bütün çözümleme
+    # DZ.gecerli_mi'den geçer (Stüdyo'nun kendi fonksiyonları da onu modül adıyla çağırır)
+    import threading as _th
+    _zemberek_kilidi = _th.Lock()
+    _asil_gecerli_mi = DZ.gecerli_mi
+
+    def _kilitli_gecerli_mi(w):
+        with _zemberek_kilidi:
+            return _asil_gecerli_mi(w)
+    _kilitli_gecerli_mi._kilitli = True
+    DZ.gecerli_mi = _kilitli_gecerli_mi
+
 UST = re.compile(r"\ue000(\d{1,3})\ue001")
 SAYFA_ISARET = re.compile(r"\ue002([^\ue003]{1,20})\ue003")
 END_PUNCT = tuple('.!?:;"”»)]…')
@@ -380,6 +393,37 @@ def pdf_sayfalari(yol, ilerleme=None):
     bilgi["baslik"] = (meta.get("title") or "").strip()
     bilgi["yazar"] = (meta.get("author") or "").strip()
     return sayfalar, bilgi
+
+
+def ocr_gerekir(yol):
+    """0.5.17: dosya ağır (OCR) şeridine mi gider: PDF'te yeniden okunacak sayfalardan (metin katmanı olmayan ya da kötü)
+    önbellekte olmayanı varsa. EPUB/DOCX/TXT, iyi katmanlı PDF ve sayfaları önbellekte olan PDF hafif şeritte işlenir.
+    Karar pdf_sayfalari'nınkiyle aynı; emin olunamazsa ağır şerit (eski davranış)."""
+    if not str(yol).lower().endswith(".pdf"):
+        return False
+    try:
+        import fitz
+        doc = fitz.open(yol)
+        ocr, katman = [], []
+        for i, page in enumerate(doc):
+            try:
+                rows = _katman_satirlari(page)
+            except Exception:
+                rows = []
+            if sum(_harf(r["text"]) for r in rows) < 40 or (_ocr_motoru() == "surya" and _katman_kotu(rows)):
+                ocr.append(i)
+            else:
+                katman += [r["text"] for r in rows]
+        if TS.katman_bozuk_mu("\n".join(katman)):
+            ocr = list(range(len(doc)))
+        if not ocr:
+            return False
+        if _ocr_motoru() != "surya":
+            return True
+        klasor, anahtar = _ocr_onbellek_klasoru(yol), _surya_anahtari()
+        return any(_onbellek_oku(klasor, i, anahtar) is None for i in ocr)
+    except Exception:
+        return True
 
 
 def _ocr_motoru():
