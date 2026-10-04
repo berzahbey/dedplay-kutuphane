@@ -450,7 +450,8 @@ def _surya_satirlari(text_lines, olcek, img=None):
         # olmayan satırlar atılır; bölgenin üstündeki gerçek satırlar ("1. KITAP") kalır (0.5.13)
         sinir = min(r["top"] for r in cjk) - 2 * max(r["h"] for r in cjk)
         rows = [r for r in rows if not _CJK.search(r["text"]) and
-                (r["bot"] < sinir or _AR.search(r["text"]) or _gecerli_oran(r["text"]) >= 0.5)]
+                (r["bot"] < sinir or _AR.search(r["text"]) or (_gecerli_oran(r["text"]) >= 0.5 and _harf(r["text"]) >= 5))]
+        # 0.5.14: uydurma bölgesinde 5 harften kısa satır da atılır ("Carl" Zemberek'e göre geçerli bir kelime)
     elif rows and len(rows) <= 3 and sum(_harf(r["text"]) for r in rows) < 40 and \
             not any(_AR.search(r["text"]) or re.fullmatch(r"\W*\d{1,4}\W*", r["text"]) for r in rows) and (
             not any(_gecerli_oran(r["text"]) >= 0.5 for r in rows) or
@@ -633,7 +634,9 @@ def _karisik_satiri_diz(metin, kesit=None):
         return metin
     tk = [(d["left"][k], (d["text"][k] or "").strip()) for k in range(len(d["text"])) if (d["text"][k] or "").strip()]
     gen = [d["width"][k] for k in range(len(d["text"])) if (d["text"][k] or "").strip()]
-    sade = lambda w: re.sub(r"[^\wçğıöşüâîû]", "", w.lower())
+    # 0.5.14: şapka ve nokta farkı yok sayılır ("Teala" = "Teâlâ", "ADİ" = "adi"); her kelime en iyi adayına eşlenir
+    sade = lambda w: "".join(c for c in unicodedata.normalize("NFKD", w.lower().replace("ı", "i"))
+                             if c.isalnum() and not unicodedata.combining(c))
     eslesen, yer = set(), []
     parcalar = [(t, y) for t, y in parcalar if t == "A" or re.search(r"[^\W\d_]{2}", y)]  # yalnız işaret: at
     for tur, yazi in parcalar:
@@ -642,10 +645,15 @@ def _karisik_satiri_diz(metin, kesit=None):
             continue
         adaylar = []
         for w in [w for w in yazi.split() if len(sade(w)) >= 2]:
+            en_iyi = None
             for k, (x, t) in enumerate(tk):
-                if k not in eslesen and len(sade(t)) >= 2 and difflib.SequenceMatcher(None, sade(w), sade(t)).ratio() >= 0.75:
-                    adaylar.append((x, k))
-                    break
+                if k in eslesen or k in {a for _, a in adaylar} or len(sade(t)) < 2:
+                    continue
+                oran = difflib.SequenceMatcher(None, sade(w), sade(t)).ratio()
+                if oran >= 0.75 and (en_iyi is None or oran > en_iyi[0]):
+                    en_iyi = (oran, x, k)
+            if en_iyi:
+                adaylar.append((en_iyi[1], en_iyi[2]))
         if not adaylar:
             return metin  # Türkçe parçanın yeri bulunamadı: dokunma
         eslesen.update(k for _, k in adaylar)
@@ -1136,7 +1144,7 @@ def _dipnot_ayir(rows, h, govde):
     return rows, []
 
 
-_NOT_BASI = re.compile(r"^\s*[(\[]\s?(\d{1,3})\s?[)\]]\s*\S")
+_NOT_BASI = re.compile(r"^\s*[(\[]\s?(\d{1,3}|\*{1,3})\s?[)\]]\s*\S")  # 0.5.14: "(*)" yıldızlı dipnot da
 
 
 _BENZER_ATIF = re.compile(r"(?<=[^\s(\[])\s?[(\[]\s?([IİlıiL|!Oo]{1,2})\s?[)\]]")  # OCR: "(1)" -> "(İİ)"
@@ -1188,17 +1196,22 @@ def _notlari_bol(dip_paras):
     out = []
     for p in dip_paras:
         p = UST.sub(r"\1 ", p)
-        for parca in re.split(r"\s(?=\d{1,3}[\s.)]+[^\W\d])|\s(?=[(\[]\d{1,3}[)\]]\s*[^\W\d])", p):
+        for parca in re.split(r"\s(?=\d{1,3}[\s.)]+[^\W\d])|\s(?=[(\[]\d{1,3}[)\]]\s*[^\W\d])|\s(?=[(\[]\*{1,3}[)\]])", p):
             parca = parca.strip()
             if not parca:
+                continue
+            yildiz = re.match(r"^[(\[](\*{1,3})[)\]]\s*(.*)$", parca, re.S)
+            if yildiz:  # 0.5.14: "(*)" -> 901, "(**)" -> 902 (metindeki "(*)" atfı aynı numarayla bağlanır)
+                out.append((900 + len(yildiz.group(1)), yildiz.group(2).strip()))
                 continue
             m_par = re.match(r"^[(\[](\d{1,3})[)\]]\s*(.*)$", parca, re.S)
             m = m_par or re.match(r"^(\d{1,3})[\s.)]+(.*)$", parca, re.S)
             onceki = out[-1][0] if out else None
             # 0.5.13: dipnot içindeki sayı ("zamanımızdan 850 sene evvel") yeni dipnot değildir: çıplak sayı ancak
             # sıradaki numaraysa, parantezli numara önceki numaradan biraz büyükse yeni dipnot sayılır
-            if m and (onceki is None or int(m.group(1)) == onceki + 1 or
-                      (m_par and onceki < int(m.group(1)) <= onceki + 3)):
+            if m and (onceki is None or (onceki >= 900 and m_par and int(m.group(1)) == 1) or
+                      (onceki < 900 and (int(m.group(1)) == onceki + 1 or
+                                         (m_par and onceki < int(m.group(1)) <= onceki + 3)))):
                 out.append((int(m.group(1)), m.group(2).strip()))
             elif out:
                 out[-1] = (out[-1][0], out[-1][1] + " " + parca)
@@ -1831,6 +1844,9 @@ def pdf_oku(yol, ilerleme=None):
         yeni_paras = []
         for tur, metin, boy in paras:
             metin = UST.sub(bagla, metin)
+            if tur == "p" and any(n > 900 for n in sayfa_notu):  # 0.5.14: "…yazılmamıştır.(*)"
+                metin = re.sub(r"(?<=[^\s(\[])\s?[(\[]\s?(\*{1,3})\s?[)\]]",
+                               lambda m: bagla(re.match(r"(\d+)", str(900 + len(m.group(1))))), metin)
             if tur == "p" and sayfa_notu:  # okunamamış üst simge: kelimeye yapışık rakam, noktadan sonra "!"
                 metin = YAPISIK.sub(bagla, metin)
                 # parantezli atıf "…bolmaz. (2)" (bir kelimenin/noktalamanın ardından; paragraf başındaki madde no değil)
@@ -2487,6 +2503,14 @@ def _konumlar(metin):
 def kitaba_cevir(ogeler, notlar, kunye):
     ogeler = _basliklari_denetle(ogeler)
     _seviyeler(ogeler)
+    # 0.5.14: "A — ZAMAN", "B — İRTİKÂ", "C - RIZIK": harfle numaralı ara başlıklar aynı seviyede (yazı boyu tahmini
+    # birini bir alt seviyeye düşürebiliyor); en sık seviye, eşitlikte üstteki
+    harfli = [o for o in ogeler if o["tur"] == "baslik" and not o.get("fihrist") and _harfli_madde_basligi(o["metin"])]
+    if len(harfli) >= 2:
+        sayim = collections.Counter(o.get("seviye", 1) for o in harfli).most_common()
+        ortak = min(sv for sv, c in sayim if c == sayim[0][1])
+        for o in harfli:
+            o["seviye"] = ortak
     ogeler = _basliklari_birlestir(ogeler)
     ogeler = [o for o in ogeler if SAYFA_ISARET.sub("", o["metin"]).strip() or SAYFA_ISARET.search(o["metin"])]
     # tek başına kalmış ayet/madde numarası: sonraki paragrafa (Stüdyo kuralı)
