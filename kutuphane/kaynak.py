@@ -625,33 +625,121 @@ def _karisik_satiri_diz(metin, kesit=None):
     return re.sub(r"\s+", " ", " ".join(out)).strip()
 
 
+def _surya_anahtari():
+    """Önbellek anahtarı: Surya sürümü ve çözünürlük değişirse eski kayıt kullanılmaz."""
+    try:
+        from importlib.metadata import version
+        surum = version("surya-ocr")
+    except Exception:
+        surum = "?"
+    return f"surya-{surum}-dpi{_SURYA_DPI}"
+
+
+def _ocr_onbellek_klasoru(yol):
+    """0.5.12: Surya'nın ham satırları sayfa sayfa saklanır; kod düzeltilip kitap yeniden işlenince OCR tekrarlanmaz.
+    Klasör dosyanın İÇERİĞİNİN özetiyle adlandırılır (aynı dosya yeniden yüklense de bulunur). OCR_ONBELLEK=0 kapatır."""
+    kok = os.environ.get("OCR_ONBELLEK", os.path.join(os.environ.get("DATA_DIR", "/data"), "ocr_onbellek"))
+    if kok.strip().lower() in ("", "0", "kapali", "kapalı"):
+        return None
+    try:
+        h = hashlib.sha1()
+        with open(yol, "rb") as f:
+            for parca in iter(lambda: f.read(1 << 20), b""):
+                h.update(parca)
+        return os.path.join(kok, h.hexdigest()[:20])
+    except OSError:
+        return None
+
+
+def _onbellek_oku(klasor, i, anahtar):
+    """Sayfanın kayıtlı ham satırları [(metin, (x0, y0, x1, y1))] ya da None (yok, bozuk ya da başka sürüm)."""
+    if not klasor:
+        return None
+    try:
+        import json
+        with open(os.path.join(klasor, f"s{i + 1:04d}.json"), encoding="utf-8") as f:
+            kayit = json.load(f)
+        if kayit.get("anahtar") != anahtar:
+            return None
+        return [(str(t), tuple(float(v) for v in b)) for t, b in kayit["satirlar"]]
+    except Exception:
+        return None
+
+
+def _onbellek_yaz(klasor, i, anahtar, text_lines, pdf_adi=""):
+    """Ham Surya satırları yazılır (geçici dosya + yeniden adlandırma: yarım dosya kalmaz). Yazılamazsa (salt okunur
+    klasör, dolu disk) sessizce geçilir: önbellek yalnız hız içindir."""
+    if not klasor:
+        return
+    try:
+        import json
+        os.makedirs(klasor, exist_ok=True)
+        if pdf_adi and not os.path.exists(os.path.join(klasor, "kaynak.txt")):
+            with open(os.path.join(klasor, "kaynak.txt"), "w", encoding="utf-8") as f:
+                f.write(pdf_adi + "\n")
+        kayit = {"anahtar": anahtar, "sayfa": i + 1,
+                 "satirlar": [[s.text or "", [round(float(v), 2) for v in s.bbox]] for s in text_lines]}
+        hedef = os.path.join(klasor, f"s{i + 1:04d}.json")
+        with open(hedef + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(kayit, f, ensure_ascii=False)
+        os.replace(hedef + ".tmp", hedef)
+    except Exception as e:
+        print(f"OCR önbelleğine yazılamadı (sayfa {i + 1}): {type(e).__name__}: {e}")
+
+
 def _surya_sayfalar(yol, sayfalar, ilerleme=None, grup=4):
     """Sayfaları Surya ile okur (tek süreçte, dörder sayfa). {sayfa: (satırlar, genişlik, yükseklik)}; okunamayan
-    sayfa sonuçta yer almaz (Tesseract'a kalır)."""
-    model = _surya_hazir()
-    if not model or not sayfalar:
+    sayfa sonuçta yer almaz (Tesseract'a kalır). 0.5.12: önbellekteki sayfalar Surya'ya gitmez; ham satırlar
+    önbellekten okunup aynı işlemden (_surya_satirlari) geçer, yani kod düzeltmeleri bunlara da uygulanır."""
+    if not sayfalar:
         return {}
+    import types
     import fitz
     from PIL import Image
-    rec, det = model
     doc = fitz.open(yol)
     olcek = 72 / _SURYA_DPI
-    out = {}
-    for k in range(0, len(sayfalar), grup):
-        parca = sayfalar[k:k + grup]
+    klasor = _ocr_onbellek_klasoru(yol)
+    anahtar = _surya_anahtari()
+
+    def resim(i):
+        pix = doc[i].get_pixmap(dpi=_SURYA_DPI)
+        return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+    out, kalan = {}, []
+    for i in sayfalar:
+        ham = _onbellek_oku(klasor, i, anahtar)
+        if ham is None:
+            kalan.append(i)
+            continue
+        satirlar = [types.SimpleNamespace(text=t, bbox=b) for t, b in ham]
+        try:  # karışık (Arapça + Türkçe) satır varsa dizme için sayfa resmi gerekir
+            img = resim(i) if any(_AR.search(s.text) and _LATIN.search(s.text) for s in satirlar) else None
+            out[i] = (_surya_satirlari(satirlar, olcek, img), doc[i].rect.width, doc[i].rect.height)
+        except Exception as e:
+            print(f"Önbellekteki sayfa {i + 1} işlenemedi, yeniden okunacak: {type(e).__name__}: {e}")
+            kalan.append(i)
+    onbellekten = len(out)
+    if ilerleme and onbellekten:
+        ilerleme(f"OCR önbellekten: {onbellekten}/{len(sayfalar)} sayfa")
+    if not kalan:
+        return out
+    model = _surya_hazir()
+    if not model:
+        return out
+    rec, det = model
+    ek = f" (önbellekten {onbellekten})" if onbellekten else ""
+    for k in range(0, len(kalan), grup):
+        parca = kalan[k:k + grup]
         try:
-            resimler = []
-            for i in parca:
-                pix = doc[i].get_pixmap(dpi=_SURYA_DPI)
-                resimler.append(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
+            resimler = [resim(i) for i in parca]
             sonuc = rec(resimler, det_predictor=det, sort_lines=True, math_mode=False)
-            for i, s in zip(parca, sonuc):
-                out[i] = (_surya_satirlari(s.text_lines, olcek, resimler[parca.index(i)]), doc[i].rect.width,
-                          doc[i].rect.height)
+            for i, s, img in zip(parca, sonuc, resimler):
+                _onbellek_yaz(klasor, i, anahtar, s.text_lines, os.path.basename(yol))
+                out[i] = (_surya_satirlari(s.text_lines, olcek, img), doc[i].rect.width, doc[i].rect.height)
         except Exception as e:
             print(f"Surya {parca} sayfalarında hata, Tesseract'a kalıyor: {type(e).__name__}: {e}")
         if ilerleme:
-            ilerleme(f"OCR (Surya): sayfa {min(k + grup, len(sayfalar))}/{len(sayfalar)}")
+            ilerleme(f"OCR (Surya): sayfa {min(k + grup, len(kalan))}/{len(kalan)}{ek}")
     return out
 
 
