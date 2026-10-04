@@ -437,6 +437,7 @@ def _surya_satirlari(text_lines, olcek, img=None):
         t = re.sub(r"<sup>\s*[(\[]?\s*(\d{1,3})\s*[)\]]?\s*</sup>", "\ue000\\1\ue001", ham)
         t = html.unescape(re.sub(r"</?[a-zA-Z][^>]*>", "", t))
         t = _tekrari_at(_surya_harfleri(TS.norm(t)).strip())
+        t = re.sub(r"\s+[(\[]\s*$", "", t)  # 0.5.15: sondaki tek açık parantez kalem işareti
         if not t:
             continue
         x0, y0, x1, y1 = satir.bbox
@@ -461,6 +462,8 @@ def _surya_satirlari(text_lines, olcek, img=None):
         rows = []
     rows = _surya_kucuk_parcalar(rows)
     rows = _surya_ayni_satir(rows)
+    for r in rows:
+        r["surya"] = True  # 0.5.15
     rows.sort(key=lambda r: (r["top"], r["x0"]))
     return _satir_parcalarini_birlestir(rows)
 
@@ -587,6 +590,50 @@ def _surya_ayni_satir(rows):
             if degisti:
                 break
     return out
+
+
+# 0.5.15: Türkçe harfi düşmüş büyük harfli kelime ("BESINCI" -> "BEŞİNCİ"): tek geçerli aday varsa o
+_TR_ESLER = {"I": "İ", "S": "Ş", "C": "Ç", "G": "Ğ", "O": "Ö", "U": "Ü", "i": "ı", "s": "ş", "c": "ç", "g": "ğ",
+             "o": "ö", "u": "ü"}
+
+
+def _gecerli_kelime(k):
+    try:
+        return bool(DZ.gecerli_mi(k) or DZ._kelime_mi(k))
+    except Exception:
+        return True
+
+
+def _turkce_kelime_onar(k):
+    """Geçersiz kelimede düşmüş Türkçe harfleri dener (en çok 6 yer); geçerli adaylardan en çok harfi düzelten tek
+    aday varsa onu döndürür ("BESINCI" -> "BEŞİNCİ")."""
+    if len(k) < 3 or _gecerli_kelime(k):
+        return k
+    yerler = [i for i, c in enumerate(k) if c in _TR_ESLER][:6]
+    if not yerler:
+        return k
+    import itertools
+    adaylar = set()
+    for secim in itertools.product((False, True), repeat=len(yerler)):
+        if not any(secim):
+            continue
+        h = list(k)
+        for i, deg in zip(yerler, secim):
+            if deg:
+                h[i] = _TR_ESLER[h[i]]
+        a = "".join(h)
+        if _gecerli_kelime(a):
+            adaylar.add((sum(secim), a))
+    if not adaylar:
+        return k
+    en = max(n for n, _ in adaylar)
+    enler = [a for n, a in adaylar if n == en]  # Zemberek gevşek: "BESİNCİ" de geçer; en çok harfi düzelten aday
+    return enler[0] if len(enler) == 1 else k
+
+
+def _buyuk_baslik_onar(t):
+    """Büyük harfli başlıkta harfi düşmüş kelimeler onarılır (uzunluk aynı kalır: sayfa konumları geçerli)."""
+    return re.sub(r"[^\W\d_]{3,}", lambda m: _turkce_kelime_onar(m.group()) if m.group().isupper() else m.group(), t)
 
 
 def _harfli_madde_basligi(t):
@@ -942,7 +989,17 @@ _UST_BILGI_NO = re.compile(r"^(\d{1,4})\s+\S.{0,70}$|^.{1,70}\S\s+(\d{1,4})$")
 
 def _sayfa_no_ve_kenar(rows, h):
     """Basılı sayfa numarasını bulur, sayfa numarası satırlarını çıkarır. (no, kalan satırlar)"""
-    no, kalan = None, []
+    no, kalan, tahmin = None, [], None
+    # 0.5.15: Surya'da üst bilgi her sayfada farklı okunabilir ("Dinde Kırk Prensip", "Dunde Kirk Prensip") ve tekrar eden
+    # satır diye tanınmaz: sayfanın üstündeki numara satırıyla aynı hizadaki kısa satırlar üst bilgidir (kalemle
+    # eklenmiş not da dahil). Numara satırının kendisi aşağıda sayfa numarası olarak okunur.
+    ust_no = [r for r in rows if r.get("surya") and r["top"] < h * 0.12 and r["h"] >= 6 and
+              re.fullmatch(r"\W*\d{1,4}\W*", _rakam(r["text"]))]
+    if ust_no:
+        n = ust_no[0]
+        bant = (n["top"] - (n["bot"] - n["top"]), n["bot"] + (n["bot"] - n["top"]))
+        rows = [r for r in rows if r is n or not (r.get("surya") and len(r["text"]) <= 80 and
+                                                  bant[0] <= (r["top"] + r["bot"]) / 2 <= bant[1])]
     for r in rows:
         kenar = r["top"] < h * 0.12 or r["bot"] > h * 0.88
         t = _rakam(r["text"].strip())
@@ -951,10 +1008,10 @@ def _sayfa_no_ve_kenar(rows, h):
             continue
         if kenar and r["n"] <= 12:
             m = _UST_BILGI_NO.match(t)
-            if m and no is None:
-                no = m.group(1) or m.group(2)
+            if m and tahmin is None:
+                tahmin = m.group(1) or m.group(2)
         kalan.append(r)
-    return no, kalan
+    return no or tahmin, kalan  # 0.5.15: kesin numara satırı öncelikli
 
 
 def _tekrar_edenleri_at(sayfa_satirlari):
@@ -1016,7 +1073,7 @@ def _govde_boyu(sayfa_satirlari, ocr):
 
 def _baslik_mi(r, govde, genislik, kalin_oran):
     t = r["text"].strip()
-    if len(t) > 90 or len(t) < 2 or t.endswith((",", ";")) or UST.search(t):
+    if len(t) > 90 or len(t) < 2 or t.endswith((",", ";")) or UST.search(re.sub(r"\ue000\d{1,3}\ue001\s*$", "", t)):  # 0.5.15
         return False
     if TS.ICERIK_BASLIK.match(t) or BOLUM_NO.match(t) or _harfli_madde_basligi(t):
         return True
@@ -1126,6 +1183,26 @@ def _dipnot_ayir(rows, h, govde):
     """Önce Stüdyo'nun punto kuralı; bulunamazsa: alt yarıda büyük boşluktan sonra rakamla başlayan satırlar."""
     if not rows:
         return [], []
+    # 0.5.15: "⁴ -Allah teâlânın…", "5-Eski…", "7 - Arş'ın…" (çizginin altında, numara üst simge ya da tireli): sayfanın
+    # alt kısmında böyle başlayan ve numarası metinde atıf olarak geçen ilk satır. Üstünde gövdeden küçük puntolu satırlar
+    # ve büyük boşluk varsa dipnot bölgesi o boşluktan başlar (önceki sayfadan taşan devam: "bildirilmiştir. (Tahrim, 6)")
+    for k in range(1, len(rows)):
+        m = _NOT_BASI_TIRE.match(rows[k]["text"])
+        if not (m and rows[k]["top"] > h * 0.35):
+            continue
+        no = m.group(1) or m.group(2)
+        once = " ".join(r["text"] for r in rows[:k])
+        if not (("\ue000" + no + "\ue001") in once or re.search(r"[^\W\d_][.,;:!?\"”»)]?" + no + r"(?!\d)", once)):
+            continue
+        bas = k
+        for j in range(k - 1, 0, -1):
+            if rows[j]["top"] < h * 0.35 or rows[j]["h"] >= govde * 0.85:
+                break
+            if rows[j]["top"] - rows[j - 1]["bot"] > govde * 1.5:
+                bas = j
+                break
+        if rows[bas]["top"] - rows[bas - 1]["bot"] > govde * 0.8:
+            return rows[:bas], rows[bas:]
     ana, dip = TS._dipnot_ayir(rows, h)
     if dip:
         return ana, dip
@@ -1144,6 +1221,7 @@ def _dipnot_ayir(rows, h, govde):
     return rows, []
 
 
+_NOT_BASI_TIRE = re.compile(r"^\s*(?:\ue000(\d{1,3})\ue001\s*[-–]?|(\d{1,3})\s?[-–])\s*[^\W\d]")  # 0.5.15
 _NOT_BASI = re.compile(r"^\s*[(\[]\s?(\d{1,3}|\*{1,3})\s?[)\]]\s*\S")  # 0.5.14: "(*)" yıldızlı dipnot da
 
 
@@ -1196,7 +1274,9 @@ def _notlari_bol(dip_paras):
     out = []
     for p in dip_paras:
         p = UST.sub(r"\1 ", p)
-        for parca in re.split(r"\s(?=\d{1,3}[\s.)]+[^\W\d])|\s(?=[(\[]\d{1,3}[)\]]\s*[^\W\d])|\s(?=[(\[]\*{1,3}[)\]])", p):
+        for parca in re.split(r"(?<![,;:])\s(?=\d{1,3}[\s.)]+[^\W\d])|\s(?=[(\[]\d{1,3}[)\]]\s*[^\W\d])"
+                              r"|\s(?=[(\[]\*{1,3}[)\]])|(?<![,;:])\s(?=\d{1,3}\s?[-–]\s?[^\W\d])", p):
+            # 0.5.15: "5-Eski", "4 -Allah"; virgülden sonraki sayı ("(Tahrim, 6) Allah") dipnot başı değildir
             parca = parca.strip()
             if not parca:
                 continue
@@ -1205,7 +1285,7 @@ def _notlari_bol(dip_paras):
                 out.append((900 + len(yildiz.group(1)), yildiz.group(2).strip()))
                 continue
             m_par = re.match(r"^[(\[](\d{1,3})[)\]]\s*(.*)$", parca, re.S)
-            m = m_par or re.match(r"^(\d{1,3})[\s.)]+(.*)$", parca, re.S)
+            m = m_par or re.match(r"^(\d{1,3})(?:\s?[-–]\s?|[\s.)]+)[-–]?\s?(.*)$", parca, re.S)
             onceki = out[-1][0] if out else None
             # 0.5.13: dipnot içindeki sayı ("zamanımızdan 850 sene evvel") yeni dipnot değildir: çıplak sayı ancak
             # sıradaki numaraysa, parantezli numara önceki numaradan biraz büyükse yeni dipnot sayılır
@@ -2322,6 +2402,8 @@ _COP_ISARET = re.compile(r"[#»«|<>@^~_=\\{}\[\]]")
 def anlamli_baslik(t):
     """Başlık gerçekten başlık mı? OCR çöpü (Arapça satırın Türkçe OCR'ı) ve tek kalmış cümle sonları elenir."""
     t = SAYFA_ISARET.sub("", t).strip()
+    isaretli = bool(re.search(r"(?:\ue000\d{1,3}\ue001|\{\{n\d+\}\})\s*$", t))
+    t = re.sub(r"(?:\ue000\d{1,3}\ue001|\{\{n\d+\}\})\s*$", "", t).strip()  # 0.5.15: "İLİM²"
     if not t or len(t) > 90 or _COP_ISARET.search(t) or t[0] in "“\"'‘«(":
         return False  # tırnakla başlayan satır cümle parçasıdır
     if TS.ICERIK_BASLIK.match(t) or BOLUM_NO.match(t) or _harfli_madde_basligi(t) or re.fullmatch(
@@ -2329,7 +2411,9 @@ def anlamli_baslik(t):
         return True
     if not t[0].isalnum():
         return False  # ? ile başlayan vb.
-    if len(t.split()) == 1 and len(re.sub(r"[^\w]", "", t)) < 5:
+    if len(t.split()) == 1 and len(re.sub(r"[^\w]", "", t)) < 5 and not (
+            isaretli and t.isupper() and len(re.sub(r"[^\w]", "", t)) >= 3 and _gecerli_kelime(t)):
+        # (dipnot işaretli kısa büyük harfli kelime başlıktır: "İLİM²"; işaretsiz "TİRE" gibi kırıntı değil)
         return False  # tek kelimelik kısa satır (TİRE): bilinen başlıklar yukarıda kabul edildi
     if t[0].islower() or (t.endswith((".", ",", ";")) and not re.search(r"\b(vs|bkz|s|c)\.$", t, re.I)):
         return False
@@ -2352,7 +2436,8 @@ def anlamli_baslik(t):
     kucuk = [k for k in kelimeler if not k.isupper() and k.lower() not in ("ve", "ile", "ki", "da", "de", "ya", "veya")]
     if buyuk and kucuk and not all(re.search(re.escape(k) + r"\.", t) for k in buyuk):
         return False
-    iyi = sum(1 for k in kelimeler if DZ.gecerli_mi(k) or DZ._kelime_mi(k))
+    iyi = sum(1 for k in kelimeler if DZ.gecerli_mi(k) or DZ._kelime_mi(k) or
+              (k.isupper() and _turkce_kelime_onar(k) != k))  # 0.5.15: "BESINCI" (BEŞİNCİ)
     if len(kelimeler) >= 2 and buyuk and not kucuk:  # TAMAMI BÜYÜK: dini terimler sözlükte yok (RUBÛBİYYETİ BİLMEK)
         return iyi / len(kelimeler) >= 0.5
     return iyi / len(kelimeler) >= 0.75
@@ -2538,7 +2623,7 @@ def kitaba_cevir(ogeler, notlar, kunye):
         sayfa = [{"no": e, "konum": {"tr": 0}} for e in tasinan] + [{"no": e, "konum": {"tr": k}} for e, k in sayfalar]
         tasinan = []
         if o["tur"] == "baslik":
-            temiz2 = temiz if o.get("fihrist") and not o.get("onar") else turkce_onar(temiz)  # kitabın kendi fihristindeki yazı zaten temiz
+            temiz2 = temiz if o.get("fihrist") and not o.get("onar") else turkce_onar(_buyuk_baslik_onar(temiz))  # kitabın kendi fihristindeki yazı zaten temiz
             if len(temiz2) == len(temiz):  # uzunluk aynı kalır (harf değişimi): sayfa konumları geçerli
                 temiz = temiz2
             K.blok_ekle(kit, "baslik", {"tr": temiz}, seviye=o.get("seviye", 1), sayfalar=sayfa)
@@ -2633,6 +2718,10 @@ def _kunye_sec(bilgi, ad_baslik, ad_yazar, dosya_koku):
     # Türkçe harfleriyle daha doğru yazılmıştır) tercih edilir
     kopya = lambda s: bool(ad_yazar) and sade(s) == sade(ad_yazar + " " + ad_baslik)
     meta_b = bilgi.get("baslik") if _anlamli(bilgi.get("baslik")) else ""
+    # 0.5.15: bilgi alanındaki ad dosya adındaki eser adıyla hiç kelime paylaşmıyorsa çöp ya da başka bir eserdir
+    ad_kel = {k for k in sade(ad_baslik or "").split() if len(k) >= 3}
+    if meta_b and len(ad_kel) >= 2 and not ad_kel & {k for k in sade(meta_b).split() if len(k) >= 3}:
+        meta_b = ""
     meta_y = bilgi.get("yazar") if _anlamli(bilgi.get("yazar")) and _kisi_adi_mi(bilgi.get("yazar")) else ""
     satirlar = bilgi.get("kapak_satirlari") or ([(bilgi["kapak_baslik"], 1, 0)] if bilgi.get("kapak_baslik") else [])
     if not ad_baslik.isascii():  # dosya adında Türkçe harfler var: kullanıcının verdiği düzgün ad, en güvenilir kaynak
