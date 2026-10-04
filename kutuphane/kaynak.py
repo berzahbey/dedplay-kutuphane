@@ -30,7 +30,7 @@ except ImportError:  # pragma: no cover
 UST = re.compile(r"\ue000(\d{1,3})\ue001")
 SAYFA_ISARET = re.compile(r"\ue002([^\ue003]{1,20})\ue003")
 END_PUNCT = tuple('.!?:;"”»)]…')
-YAPISIK = re.compile(r"(?<=[a-zçğıöşüâîû\.,;:])(\d{1,2})(?=[\s.,;:!?”\"')]|$)")
+YAPISIK = re.compile(r"(?<=[a-zçğıöşüâîû\.,;:\"”»’')])(\d{1,2})(?=[\s.,;:!?”\"')]|$)")  # 0.5.16: tırnaktan sonra
 BOLUM_NO = re.compile(r"^(birinci|ikinci|üçüncü|dördüncü|beşinci|altıncı|yedinci|sekizinci|dokuzuncu|onuncu|"
                       r"\d{1,2}\.?|[ivxlc]{1,6}\.?)\s+(bölüm|kısım|fasıl|bab|kitap|makale|mektup|risale)[.:]?$", re.I)
 OCR_DPI = 300
@@ -438,6 +438,9 @@ def _surya_satirlari(text_lines, olcek, img=None):
         t = html.unescape(re.sub(r"</?[a-zA-Z][^>]*>", "", t))
         t = _tekrari_at(_surya_harfleri(TS.norm(t)).strip())
         t = re.sub(r"\s+[(\[]\s*$", "", t)  # 0.5.15: sondaki tek açık parantez kalem işareti
+        t = _kalem_isaretleri(t)  # 0.5.16
+        if len(t.strip()) <= 2 and not _LATIN.search(t) and re.fullmatch(r"[\s\u0660-\u0669\u06f0-\u06f9.\u06d4]+", t):
+            continue  # "۰": Arapça rakam/nokta kırıntısı
         if not t:
             continue
         x0, y0, x1, y1 = satir.bbox
@@ -634,6 +637,20 @@ def _turkce_kelime_onar(k):
 def _buyuk_baslik_onar(t):
     """Büyük harfli başlıkta harfi düşmüş kelimeler onarılır (uzunluk aynı kalır: sayfa konumları geçerli)."""
     return re.sub(r"[^\W\d_]{3,}", lambda m: _turkce_kelime_onar(m.group()) if m.group().isupper() else m.group(), t)
+
+
+# 0.5.16: kalemle çizilmiş köşeli parantezler ve çizgiler Surya'da "∫", "|", "[", "]", "/" olarak okunur
+def _kalem_isaretleri(t):
+    t = t.replace("∫", " ")
+    if "[" not in t:
+        t = re.sub(r"(?<=[.,:;!?\"”»)])\s*\]+", "", t)  # "yaptırmak.]", "tamamlar. ]"
+        t = re.sub(r"\s+\]+(?=\s|$)", "", t)
+    if "]" not in t:
+        t = re.sub(r"^\s*\[+\s*(?=[A-ZÇĞİÖŞÜÂÎÛ0-9\"“])", "", t)
+    t = re.sub(r"^\s*\|+\s*(?=[A-ZÇĞİÖŞÜÂÎÛ0-9\"“])", "", t)  # "|Üçüncü kısım"
+    t = re.sub(r"\s+\|+\s*$", "", t)
+    t = re.sub(r"(?<=[^\W\d_])/(?=[.,;:])", "", t)  # "oruç/."
+    return re.sub(r"\s{2,}", " ", t).strip()
 
 
 def _harfli_madde_basligi(t):
@@ -1073,7 +1090,8 @@ def _govde_boyu(sayfa_satirlari, ocr):
 
 def _baslik_mi(r, govde, genislik, kalin_oran):
     t = r["text"].strip()
-    if len(t) > 90 or len(t) < 2 or t.endswith((",", ";")) or UST.search(re.sub(r"\ue000\d{1,3}\ue001\s*$", "", t)):  # 0.5.15
+    if len(t) > 90 or len(t) < 2 or t.endswith((",", ";")) or UST.search(re.sub(r"\ue000\d{1,3}\ue001\s*$", "", t)) or \
+            re.search(r"[^\W\d_]-$", t):  # 0.5.15; 0.5.16: tireyle biten (kelimesi bölünmüş) satır başlık değil
         return False
     if TS.ICERIK_BASLIK.match(t) or BOLUM_NO.match(t) or _harfli_madde_basligi(t):
         return True
@@ -1192,18 +1210,31 @@ def _dipnot_ayir(rows, h, govde):
             continue
         no = m.group(1) or m.group(2)
         once = " ".join(r["text"] for r in rows[:k])
-        if not (("\ue000" + no + "\ue001") in once or re.search(r"[^\W\d_][.,;:!?\"”»)]?" + no + r"(?!\d)", once)):
+        if not (("\ue000" + no + "\ue001") in once or re.search(r"[^\W\d_][.,;:!?\"”»’')]{0,3}" + no + r"(?!\d)", once)):
             continue
         bas = k
+        # 0.5.16: yukarıdaki dipnot devamı: büyük boşluktan sonra, yukarısındaki gövdeden belirgin küçük puntolu blok
+        # (tek tek satır yüksekliği değil: Surya'da satır yüksekliği oynar)
         for j in range(k - 1, 0, -1):
-            if rows[j]["top"] < h * 0.35 or rows[j]["h"] >= govde * 0.85:
+            if rows[j]["top"] < h * 0.35:
                 break
-            if rows[j]["top"] - rows[j - 1]["bot"] > govde * 1.5:
+            if rows[j]["top"] - rows[j - 1]["bot"] > govde * 1.5 and _kucuk_blok(rows[:j], rows[j:k], govde):
                 bas = j
                 break
         if rows[bas]["top"] - rows[bas - 1]["bot"] > govde * 0.8:
             return rows[:bas], rows[bas:]
-    ana, dip = TS._dipnot_ayir(rows, h)
+    surya = sum(1 for r in rows if r.get("surya")) > len(rows) / 2
+    if surya:
+        # 0.5.16: Surya sayfasında Stüdyo'nun punto kuralı kullanılmaz (sayfa sonundaki kısa "dirler." satırını dipnot
+        # sanıyordu); yalnız önceki sayfadan taşan devamdan oluşan dipnot: alt kısımda büyük boşluktan sonra gelen,
+        # gövdeden belirgin küçük puntolu blok
+        for k in range(3, len(rows)):
+            if rows[k]["top"] > h * 0.45 and rows[k]["top"] - rows[k - 1]["bot"] > govde * 1.5 and \
+                    _kucuk_blok(rows[:k], rows[k:], govde):
+                return rows[:k], rows[k:]
+        ana, dip = rows, []
+    else:
+        ana, dip = TS._dipnot_ayir(rows, h)
     if dip:
         return ana, dip
     for k in range(1, len(rows)):
@@ -1221,7 +1252,17 @@ def _dipnot_ayir(rows, h, govde):
     return rows, []
 
 
-_NOT_BASI_TIRE = re.compile(r"^\s*(?:\ue000(\d{1,3})\ue001\s*[-–]?|(\d{1,3})\s?[-–])\s*[^\W\d]")  # 0.5.15
+def _kucuk_blok(ust, alt, govde):
+    """0.5.16: alt satırların ortanca yüksekliği hem üstteki gövde satırlarınınkinden (başlıklar sayılmaz) hem sayfanın
+    ortanca satır yüksekliğinden belirgin küçük mü (dipnot puntosu)."""
+    ust = [r for r in ust if r["h"] <= govde * 1.25]
+    if not ust or not alt:
+        return False
+    o = lambda rs: sorted(r["h"] for r in rs)[len(rs) // 2]
+    return o(alt) < o(ust) * 0.9 and o(alt) < govde * 0.95
+
+
+_NOT_BASI_TIRE = re.compile(r"^\s*(?:\ue000(\d{1,3})\ue001\s*[-–]?|(\d{1,3})\s?[-–])\s*[\"“«'‘]?[^\W\d]")  # 0.5.15/16
 _NOT_BASI = re.compile(r"^\s*[(\[]\s?(\d{1,3}|\*{1,3})\s?[)\]]\s*\S")  # 0.5.14: "(*)" yıldızlı dipnot da
 
 
