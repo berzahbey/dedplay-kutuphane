@@ -436,13 +436,18 @@ def _surya_satirlari(text_lines, olcek, img=None):
             ham = _karisik_satiri_diz(ham, img.crop((max(0, int(x0) - 4), max(0, int(y0) - 4), int(x1) + 4, int(y1) + 4)))
         t = re.sub(r"<sup>\s*[(\[]?\s*(\d{1,3})\s*[)\]]?\s*</sup>", "\ue000\\1\ue001", ham)
         t = html.unescape(re.sub(r"</?[a-zA-Z][^>]*>", "", t))
-        t = TS.norm(t).strip()
+        t = _surya_harfleri(TS.norm(t)).strip()
         if not t:
             continue
         x0, y0, x1, y1 = satir.bbox
         kalin = sum(len(m) for m in re.findall(r"<b>(.*?)</b>", ham)) >= 0.8 * len(re.sub(r"<[^>]+>", "", ham))
         rows.append({"text": t, "h": (y1 - y0) * olcek, "top": y0 * olcek, "bot": y1 * olcek, "x0": x0 * olcek,
                      "x1": x1 * olcek, "n": len(t.split()), "kalin": kalin, "blok": 0, "ocr": True})
+    if any(_CJK.search(r["text"]) for r in rows):
+        # Surya boş/lekeli sayfada metin uydurabiliyor ("不可 province.", "Contract"): o sayfada Çince/Japonca harfli
+        # satırlar ve Arapçasız, kelimelerinin yarısı bile geçerli olmayan satırlar atılır
+        rows = [r for r in rows if not _CJK.search(r["text"]) and (_AR.search(r["text"]) or _gecerli_oran(r["text"]) >= 0.5)]
+    rows = _surya_kucuk_parcalar(rows)
     rows.sort(key=lambda r: (r["top"], r["x0"]))
     return _satir_parcalarini_birlestir(rows)
 
@@ -450,6 +455,88 @@ def _surya_satirlari(text_lines, olcek, img=None):
 _AR = re.compile(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]")
 _LATIN = re.compile(r"[A-Za-zÇĞİÖŞÜçğıöşüÂÎÛâîû]")
 _AYNA = {"(": ")", ")": "(", "[": "]", "]": "[", "«": "»", "»": "«", "﴿": "﴾", "﴾": "﴿"}
+
+# 0.5.11: Surya harf düzeltmeleri. Surya Türkçe "ş" yerine Romence "ș", şapkalı "â" yerine "å"/"ä" yazabiliyor;
+# aralıklı başlığın tek harfini Kiril okuyabiliyor ("т AKDIM").
+_SURYA_HARF = str.maketrans({"ș": "ş", "Ș": "Ş", "å": "â", "Å": "Â", "ä": "â", "Ä": "Â"})
+_KIRIL = re.compile(r"[\u0400-\u04FF]")
+_KIRIL_LATIN = str.maketrans({"А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P",
+                              "С": "C", "Т": "T", "Х": "X", "І": "I", "а": "a", "е": "e", "о": "o", "р": "p",
+                              "с": "c", "у": "y", "х": "x", "т": "t", "і": "i"})
+_CJK = re.compile(r"[\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]")
+
+
+def _surya_harfleri(t):
+    """Surya'nın Türkçe metinde yaptığı harf karışıklıkları. Kiril harfi yalnız Latin ağırlıklı (ya da tek harflik)
+    parçada Latin eşine çevrilir."""
+    t = t.translate(_SURYA_HARF)
+    if _KIRIL.search(t):
+        if len(_LATIN.findall(t)) >= len(_KIRIL.findall(t)) or len(t.strip()) <= 2:
+            t = t.translate(_KIRIL_LATIN)
+            if len(t.strip()) == 1:
+                t = t.upper()
+    return t
+
+
+def _gecerli_oran(t):
+    """Satırdaki (3+ harfli) kelimelerin Zemberek'e göre geçerli oranı; kelime yoksa 0."""
+    kel = re.findall(r"[^\W\d_]{3,}", t)
+    if not kel:
+        return 0.0
+    try:
+        return sum(1 for k in kel if DZ.gecerli_mi(k) or DZ._kelime_mi(k)) / len(kel)
+    except Exception:
+        return 1.0
+
+
+def _surya_kucuk_parcalar(rows):
+    """Surya aynı satırdaki kısa parçayı (aralıklı başlığın ilk harfi "T", madde harfi "A —") ayrı ve daha alçak bir
+    satır olarak verebiliyor; yükseklik oranı şartı yüzünden _satir_parcalarini_birlestir onu tutmaz ve parça tek
+    başına kalıp silinir. Kısa parça (en çok 4 işaret) dikey ortası komşu satırın içindeyse ve aradaki yatay boşluk bir
+    satır yüksekliğinden azsa soldan sağa birleşir. Tek büyük harf, büyük harfli kelimeye bitişik yazılır (TAKDIM)."""
+    out = [dict(r) for r in rows]
+    degisti = True
+    while degisti:
+        degisti = False
+        for a in out:
+            ta = a["text"].strip()
+            if not ta or len(ta.replace(" ", "")) > 4:
+                continue
+            orta = (a["top"] + a["bot"]) / 2
+            for b in out:
+                tb = b["text"].strip()
+                if b is a or len(tb.replace(" ", "")) <= len(ta.replace(" ", "")) or not b["top"] <= orta <= b["bot"]:
+                    continue
+                hb = b["bot"] - b["top"]
+                if a["x1"] <= b["x0"] + 1 and b["x0"] - a["x1"] <= hb:
+                    ilk = tb.split()[0]
+                    bitisik = len(ta) == 1 and ta.isupper() and ilk.isalpha() and ilk.isupper()
+                    b["text"] = ta + ("" if bitisik else " ") + tb
+                    b["x0"] = min(a["x0"], b["x0"])
+                elif b["x1"] <= a["x0"] + 1 and a["x0"] - b["x1"] <= hb:
+                    b["text"] = tb + " " + ta
+                    b["x1"] = max(a["x1"], b["x1"])
+                else:
+                    continue
+                b["n"] = len(b["text"].split())
+                b["kalin"] = b["kalin"] and a["kalin"]
+                out.remove(a)
+                degisti = True
+                break
+            if degisti:
+                break
+    return out
+
+
+def _harfli_madde_basligi(t):
+    """"A — ZAMAN", "C - RIZIK MESELESİ", "B — İRTİKÂ (Yücelme) TABİRİ": harfle numaralanmış, büyük harfli ara başlık."""
+    t = SAYFA_ISARET.sub("", t).strip()
+    m = re.match(r"^[A-ZÇĞİÖŞÜ]\s?[—–-]\s?(\S.*)$", t)
+    if not m or len(t) > 70 or t.endswith((".", ",", ";")):
+        return False
+    govde = re.sub(r"\([^()]*\)", " ", m.group(1))
+    harf = [c for c in govde if c.isalpha()]
+    return len(harf) >= 3 and all(c.isupper() for c in harf)
 
 
 _AR_PARCA = re.compile(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF\u064B-\u065F﴿﴾]"
@@ -749,9 +836,10 @@ def _baslik_mi(r, govde, genislik, kalin_oran):
     t = r["text"].strip()
     if len(t) > 90 or len(t) < 2 or t.endswith((",", ";")) or UST.search(t):
         return False
-    if TS.ICERIK_BASLIK.match(t) or BOLUM_NO.match(t):
+    if TS.ICERIK_BASLIK.match(t) or BOLUM_NO.match(t) or _harfli_madde_basligi(t):
         return True
-    if r["h"] >= govde * (1.4 if r.get("ocr") else 1.15):
+    arapcali = bool(_AR.search(t))  # Arapça harfler satırı yüksek gösterir: büyük punto sanılmasın
+    if r["h"] >= govde * (1.4 if r.get("ocr") else 1.15) and not arapcali:
         return True
     ortada = abs((r["x0"] + r["x1"]) / 2 - genislik / 2) < genislik * 0.08 and (r["x1"] - r["x0"]) < genislik * 0.7
     if r["kalin"] and kalin_oran < 0.3 and not t.endswith(".") and (ortada or len(t) < 60):
@@ -761,7 +849,7 @@ def _baslik_mi(r, govde, genislik, kalin_oran):
         return True
     # OCR: iki yandan da içeride, ortalanmış, noktayla bitmeyen kısa satır
     return bool(r.get("ocr")) and ortada and r["x0"] > genislik * 0.25 and len(t) <= 70 and not t.endswith(END_PUNCT) \
-        and r["h"] >= govde * 1.1
+        and r["h"] >= govde * 1.1 and not arapcali
 
 
 _KENAR_BAS = re.compile(r"^\((\d{1,3})\)\s+(?=\S)")
@@ -879,6 +967,8 @@ def _atif_var(metin, no):
     """Metinde "(no)" atıf olarak (bir kelimenin ya da noktalamanın ardından) geçiyor mu. Rakam OCR'da harfe dönmüş
     olabilir ("(İİ)"): metinde tek bir rakama benzeyen parantezli işaret varsa o da sayılır."""
     if re.search(r"[^\s(\[]\s?[(\[]\s?" + re.escape(str(no)) + r"\s?[)\]]", metin):
+        return True
+    if "\ue000" + str(no) + "\ue001" in metin:  # Surya üst simgesi (0.5.11)
         return True
     return len(_BENZER_ATIF.findall(metin)) == 1
 
@@ -1700,6 +1790,11 @@ def _kopuk_paragraflari_birlestir(ogeler):
         if p and o["tur"] == "p" and p["tur"] == "p" and not o.get("koru") and not p.get("koru"):
             once = re.sub(r"\{\{n\d+\}\}|[\ue000-\ue003]", "", SAYFA_ISARET.sub("", p["metin"])).rstrip()
             sonra = SAYFA_ISARET.sub("", o["metin"]).lstrip()
+            if once and _LATIN.search(once) and not re.match(r"[a-zçğıöşü\d][)\].]\s", sonra) and (
+                    (not once.endswith(END_PUNCT) and _AR.search(once[-30:])) or
+                    (once.endswith((")", "﴾")) and _AR.search(once[-80:]) and (sonra.startswith("«") or sonra[:1].islower()))):
+                yeni[-1] = dict(p, metin=p["metin"].rstrip() + " " + o["metin"].lstrip())
+                continue
             if once and not once.endswith(END_PUNCT) and re.match(r"[a-zçğıöşüâîû]", sonra) and \
                     not re.match(r"[a-zçğıöşü][)\].]\s", sonra) and not re.match(r"^\(?[a-zçğıöşü\d][)\].]\s", once):
                 yeni[-1] = dict(p, metin=p["metin"].rstrip() + " " + o["metin"].lstrip())
@@ -2029,7 +2124,7 @@ def anlamli_baslik(t):
     t = SAYFA_ISARET.sub("", t).strip()
     if not t or len(t) > 90 or _COP_ISARET.search(t) or t[0] in "“\"'‘«(":
         return False  # tırnakla başlayan satır cümle parçasıdır
-    if TS.ICERIK_BASLIK.match(t) or BOLUM_NO.match(t) or re.fullmatch(
+    if TS.ICERIK_BASLIK.match(t) or BOLUM_NO.match(t) or _harfli_madde_basligi(t) or re.fullmatch(
             r"(bölüm|kısım|fasıl|bab|kitap|makale)\s+([ivxlc]{1,6}|\d{1,3})[.:]?", t, re.I):
         return True
     if not t[0].isalnum():
@@ -2058,6 +2153,8 @@ def anlamli_baslik(t):
     if buyuk and kucuk and not all(re.search(re.escape(k) + r"\.", t) for k in buyuk):
         return False
     iyi = sum(1 for k in kelimeler if DZ.gecerli_mi(k) or DZ._kelime_mi(k))
+    if len(kelimeler) >= 2 and buyuk and not kucuk:  # TAMAMI BÜYÜK: dini terimler sözlükte yok (RUBÛBİYYETİ BİLMEK)
+        return iyi / len(kelimeler) >= 0.5
     return iyi / len(kelimeler) >= 0.75
 
 
@@ -2226,7 +2323,7 @@ def kitaba_cevir(ogeler, notlar, kunye):
     for o, metin in zip(ogeler, duz):
         temiz, sayfalar = _konumlar(metin)
         yazi = K.NOT_ISARETI.sub("", temiz).strip()
-        if o["tur"] == "p" and not o.get("koru") and not K.NOT_ISARETI.search(temiz) and (not yazi or DZ.cop_paragraf_mi(yazi)):
+        if o["tur"] == "p" and not o.get("koru") and not K.NOT_ISARETI.search(temiz) and (not yazi or (DZ.cop_paragraf_mi(yazi) and not _AR.search(yazi))):
             tasinan += [e for e, _ in sayfalar]
             continue
         sayfa = [{"no": e, "konum": {"tr": 0}} for e in tasinan] + [{"no": e, "konum": {"tr": k}} for e, k in sayfalar]
